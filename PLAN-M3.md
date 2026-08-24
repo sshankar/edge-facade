@@ -1,0 +1,118 @@
+# M3 Implementation Plan — Fetch resolver + parity rules
+
+**Status: ✅ COMPLETE (2026-08-24)** — all acceptance criteria met: T4–T6, T7 (redirect parity), T11 pass identically on host (mock), under Viceroy (`run.sh`), and under workerd (`run-cf.sh`); Host parity verified empirically on both simulators; both wasm targets build clean. One real bug found and fixed while running the harness: the CF adapter's `redirect: manual` was never actually applied (workers-rs enum mismatch, see §5) — T7 caught it.
+
+**Goal (spec §12, M3):** Fetch resolver (static map + dynamic fallback) + parity rules — T4–T6, T11 on both platforms; Host parity verified empirically.
+
+**Definition of done:**
+- T4 (declared origin, Host parity): passing since M1/M2 — `override_host`
+  exercised under Viceroy and workerd.
+- T5 (undeclared host): fail closed on Fastly (`UnresolvedBackend`, D4);
+  fail open on CF (documented §7.5) — now asserted by the suite.
+- T6 (fetch error surface): refused origin surfaces as `Connection` on both
+  platforms (Fastly `SendErrorCause` mapping; CF D16 catch-all).
+- T7 (redirect parity, D5.2): 302 passed through, never followed, on both.
+- T11 (sequential fetches): two awaited fetches complete in sequence on the
+  Fastly poll-loop executor and natively.
+- Dynamic backend path (D4 step 2): policy-tested in `edge-core`; transport
+  verified when Viceroy/live Fastly support is available (see §4).
+
+---
+
+## 1. What was built
+
+```
+edge/
+├── edge-core/src/error.rs              # FetchError::category() — stable category
+│                                       #   names for cross-platform assertions
+└── tests/conformance/
+    ├── src/lib.rs                      # t5/t6/t7/t11 scenarios + router mounts
+    ├── tests/native.rs                 # 5 new native tests (10 total)
+    ├── edge.toml                       # + refused origin (T6 backend)
+    ├── fastly.toml                     # + refused_backend (Viceroy, dead port)
+    ├── origin.py                       # + /t7-redirect, /t7-target
+    ├── run.sh                          # + T5/T6/T7/T11 (Viceroy)
+    ├── run-cf.sh                       # + T5 (CF fail-open) / T6/T7/T11 (workerd)
+    └── workerd-conformance-t6.capnp    # NEW: dead globalOutbound for T6
+```
+
+## 2. Scenario design
+
+- **T5** (`/t5`): fetches `http://undeclared.example.com/` and reports
+  `{outcome, category, host}`. Native mock without a fetch handler and Fastly
+  both fail closed (`UnresolvedBackend`); CF (and the mock with a handler)
+  succeed — the documented §7.5 asymmetry, asserted per platform.
+- **T6** (`/t6`): fetches the declared `refused` origin (`:19999`, nothing
+  listening) and reports `{outcome, category}`. Viceroy maps
+  `SendErrorCause::ConnectionRefused` → `Connection`; workerd runs a second
+  instance (`workerd-conformance-t6.capnp`) whose `globalOutbound` points at
+  the dead port, so the JS fetch rejects → `Connection` (D16). Same category
+  on both, asserted.
+- **T7** (`/t7`): fetches `/t7-redirect`, passes the origin's 302 through
+  unchanged. A platform that auto-followed would return the target's 200;
+  drivers assert `302` + `Location: /t7-target` survive.
+- **T11** (`/t11`): two sequential fetches to distinct paths; nests the two
+  origin JSON bodies so drivers assert each hop's host/path — exercises the
+  D3 poll-loop executor contract on Fastly.
+
+## 3. Test matrix
+
+| Scenario | Native (mock) | Viceroy (run.sh) | workerd (run-cf.sh) |
+|---|---|---|---|
+| T4 declared origin + Host parity | ✅ (existing) | ✅ (existing) | ✅ (existing) |
+| T5 undeclared host | ✅ both paths | fail closed `UnresolvedBackend` | fail open `ok` (documented) |
+| T6 refused origin | ✅ `Connection` (fail_fetch) | `Connection` | `Connection` (dead outbound) |
+| T7 redirect passthrough | ✅ `302` + Location | `302` + Location | `302` + Location |
+| T11 sequential fetches | ✅ both hops | both hops | both hops |
+
+## 4. Harness results (2026-08-24)
+
+All tools were already installed on this machine (just off PATH): `viceroy`
+0.20.1 + `worker-build` 0.8.5 in `~/.cargo/bin`; `workerd` 1.20260824.1 +
+`wrangler` 4.125.0 via nvm node 26.7.0. With `PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v26.7.0/bin"`:
+
+- `tests/conformance/run.sh` (Viceroy): **T1–T7, T11 all pass**.
+- `tests/conformance/run-cf.sh` (workerd): **T1–T7, T11 all pass**.
+- `cargo test --workspace`: all suites green (23 core + 10 native conformance).
+- Both wasm targets build for conformance and hello-world.
+
+## 5. Bug found by T7: CF `redirect: manual` was never applied
+
+The T7 (redirect parity) scenario immediately exposed that the CF adapter's
+`redirect: manual` (D5.2) was inert. In workers-rs 0.8.5 there are **two
+distinct `RequestRedirect` enums**: the public `worker::RequestRedirect`
+(re-exported from `request_init` via glob) and the private
+`worker::http::redirect::RequestRedirect`. `request_to_wasm` strips only the
+latter from request extensions; the former (which our glue inserted) is
+ignored, so every CF fetch defaulted to `redirect: follow`. Under workerd a
+followed redirect through an `ExternalServer` rejects with "Network connection
+lost" (relative `Location` re-request loses the connection) — reproduced with
+a minimal JS probe before fixing.
+
+**Fix:** `edge-cloudflare/src/convert.rs` now builds the `web_sys::Request`
+directly from the public `RequestInit` API (`set_redirect(Manual)`, method,
+headers, buffered body as `Uint8Array`, empty body omitted per D17), bypassing
+the broken extension route. `fetch_request_manual` now takes
+`http::Request<Bytes>` (the body was already buffered upstream). Verified:
+manual 302 probe and the full workerd suite both pass.
+
+## 6. Risks & notes
+
+- **Dynamic backend path (D4 step 2) remains transport-unverified.** The
+  `Backend::builder` path in `edge-fastly/src/resolve.rs` is code-complete but
+  only policy-tested; verifying it needs Viceroy dynamic-backend support or a
+  live Fastly account (pending). The conformance edge.toml keeps
+  `dynamic_backends = false` so T5 exercises the fail-closed branch; a second
+  fixture (separate package, since the config is embedded via
+  `include_str!` of `<CARGO_MANIFEST_DIR>/edge.toml`) would be needed to run
+  the dynamic path in-suite.
+- **T6 timeout flavor:** refused-connection covers the category surface; a
+  *timeout* rejection is not simulated in-suite (slow-origin injection would be
+  flaky). Fastly maps timeout causes to `Timeout`; CF reports `Connection`
+  (D16) — asymmetry documented, not tested.
+- **Hop-by-hop header normalization (§7.4.4)** is documented but not asserted
+  in-suite (curl/echo harness doesn't exercise `connection`/`keep-alive`
+  differences); deferred to M5's docs + CI matrix.
+- **Tool availability:** all harness tools are installed (see §4); the only
+  remaining external checks are live deploys (Fastly/CF accounts) and the
+  dynamic-backend transport path on real Fastly.

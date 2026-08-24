@@ -9,6 +9,10 @@ name = "conformance"
 # fastly.toml ([local_server.backends] for Viceroy; [setup.backends] when
 # generated for deployment).
 api = { url = "http://api.example.com", backend = "api_backend" }
+# T6 error-surface origin: resolves to a backend whose port refuses
+# connections (Viceroy: refused_backend -> 127.0.0.1:19999; workerd: the T6
+# instance's dead globalOutbound). The fetch must surface as `Connection`.
+refused = { url = "http://refused.example.com:19999", backend = "refused_backend" }
 
 [stores]
 # Declared for parity with the full schema; T7/T8 (vars/secrets/KV) land in

@@ -54,19 +54,52 @@ pub fn body_from_bytes(bytes: Bytes) -> std::result::Result<worker::Body, worker
     worker::Body::from_stream(stream)
 }
 
-/// Convert a `web_sys::Request` into a promise-returning fetch call, keeping
-/// `redirect: manual` parity (D5.2).
+/// Convert an [`EdgeRequest`] (already buffered `Bytes`) into a
+/// promise-returning fetch call, keeping `redirect: manual` parity (D5.2).
+///
+/// The `web_sys::Request` is built directly from the public `RequestInit`
+/// API rather than via `worker::request_to_wasm`, because workers-rs 0.8.5
+/// only honors a `RequestRedirect` extension of its *private*
+/// `http::redirect` type — `worker::RequestRedirect` (the public re-export
+/// from `request_init`) is a different enum, so the extension is silently
+/// dropped and the fetch would default to `follow` (verified under workerd:
+/// a 302 from an ExternalServer then rejects with "Network connection lost").
 ///
 /// Returns the raw promise; rejection (network failure) is handled by the
 /// caller via `JsFuture`.
-pub fn fetch_request_manual(http_req: http::Request<worker::Body>) -> Result<js_sys::Promise> {
-    let mut http_req = http_req;
-    http_req
-        .extensions_mut()
-        .insert(worker::RequestRedirect::Manual);
-    let ws_req = worker::request_to_wasm(http_req).map_err(convert_err)?;
+pub fn fetch_request_manual(http_req: http::Request<Bytes>) -> Result<js_sys::Promise> {
+    let (parts, body) = http_req.into_parts();
+
+    let init = web_sys::RequestInit::new();
+    init.set_method(parts.method.as_str());
+
+    let headers = web_sys::Headers::new().map_err(js_err)?;
+    for (name, value) in parts.headers.iter() {
+        let value = value
+            .to_str()
+            .map_err(|e| Error::Internal(format!("request header not ASCII: {e}")))?;
+        headers
+            .append(name.as_str(), value)
+            .map_err(js_err)?;
+    }
+    init.set_headers(&headers);
+    init.set_redirect(web_sys::RequestRedirect::Manual);
+
+    // Empty payloads get no body at all (D17: a null body is the wire-level
+    // parity for GET/HEAD; web_sys rejects present-but-empty streams).
+    if !body.is_empty() {
+        init.set_body(&js_sys::Uint8Array::from(&body[..]));
+    }
+
+    let ws_req =
+        web_sys::Request::new_with_str_and_init(&parts.uri.to_string(), &init).map_err(js_err)?;
     let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
     Ok(scope.fetch_with_request(&ws_req))
+}
+
+/// Map a JS-level error to [`Error::Internal`].
+fn js_err(v: wasm_bindgen::JsValue) -> Error {
+    Error::Internal(format!("request construction failed: {}", js_string(&v)))
 }
 
 fn convert_err(e: worker::Error) -> Error {

@@ -54,12 +54,10 @@ impl CloudflarePlatform {
     }
 
     async fn fetch_blocking(&self, req: EdgeRequest) -> Result<EdgeResponse> {
-        // D5.2: redirect: manual — neither platform auto-follows.
-        let (parts, body) = req.into_parts();
-        let worker_body =
-            convert::body_from_bytes(body).map_err(|e| Error::Internal(e.to_string()))?;
-        let http_req: http::Request<worker::Body> = http::Request::from_parts(parts, worker_body);
-        let promise = convert::fetch_request_manual(http_req)?;
+        // D5.2: redirect: manual — neither platform auto-follows. The body
+        // is already buffered `Bytes`; the request is built from the public
+        // RequestInit API in `fetch_request_manual`.
+        let promise = convert::fetch_request_manual(req)?;
 
         let ws_resp: web_sys::Response = JsFuture::from(promise)
             .await

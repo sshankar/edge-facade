@@ -19,6 +19,21 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 class Origin(BaseHTTPRequestHandler):
     def do_GET(self):
         split = self.path.split("?", 1)
+        # T7 (redirect parity, D5.2): the origin redirects and expects the
+        # adapter to pass the 302 through, never follow it.
+        if split[0] == "/t7-redirect":
+            self.send_response(302)
+            self.send_header("Location", "/t7-target")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if split[0] == "/t7-target":
+            body = b"redirect target"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body = json.dumps(
             {
                 "host": self.headers.get("Host", ""),

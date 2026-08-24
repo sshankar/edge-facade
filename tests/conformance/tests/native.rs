@@ -2,7 +2,9 @@
 //! as the Viceroy run, exercised against the mock context on the host.
 
 use edge_core::testing::MockContextBuilder;
-use edge_core::{Context, EdgeRequest, EdgeResponse, ResponseExt, Result};
+use edge_core::{
+    Context, EdgeRequest, EdgeResponse, ResponseExt, Result, StatusCode,
+};
 
 /// Mock origin: echoes the same JSON shape the real origin server produces
 /// in the Viceroy run (host, path, query), so assertions are identical.
@@ -93,6 +95,91 @@ async fn t4_fetch_reaches_declared_origin() {
     // the same via override_host (D5.1).
     assert_eq!(json["host"], "api.example.com");
     assert_eq!(json["path"], "/t4-origin");
+}
+
+#[tokio::test]
+async fn t5_undeclared_host_fails_closed_without_handler() {
+    // No fetch handler installed -> the mock behaves like Fastly's
+    // fail-closed resolution (D4): the host is undeclared.
+    let router = edge_conformance::build_router().unwrap();
+    let mut ctx = MockContextBuilder::new().build().context();
+    let req = http::Request::builder()
+        .uri("/t5")
+        .body(Default::default())
+        .unwrap();
+    let resp = router.handle(req, &mut ctx).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    assert_eq!(json["outcome"], "error");
+    assert_eq!(json["category"], "UnresolvedBackend");
+    assert_eq!(json["host"], "undeclared.example.com");
+}
+
+#[tokio::test]
+async fn t5_undeclared_host_succeeds_with_handler() {
+    // With a handler installed (mock_origin answers any host) the fetch
+    // succeeds — the documented CF behavior (SPEC §7.5: fail open).
+    let resp = call("/t5").await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    assert_eq!(json["outcome"], "ok");
+}
+
+#[tokio::test]
+async fn t6_refused_origin_surfaces_connection_category() {
+    // fail_fetch injects FetchError::Connection — the category both
+    // platforms must report for a refused origin (D16 on CF, SendErrorCause
+    // mapping on Fastly).
+    let router = edge_conformance::build_router().unwrap();
+    let mut ctx = MockContextBuilder::new().fail_fetch().build().context();
+    let req = http::Request::builder()
+        .uri("/t6")
+        .body(Default::default())
+        .unwrap();
+    let resp = router.handle(req, &mut ctx).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    assert_eq!(json["outcome"], "error");
+    assert_eq!(json["category"], "Connection");
+}
+
+#[tokio::test]
+async fn t7_redirect_is_not_followed() {
+    // The mock origin redirects /t7-redirect -> /t7-target; the adapter must
+    // pass the 302 through (D5.2), never follow it.
+    let mut ctx = MockContextBuilder::new()
+        .on_fetch(|req| {
+            if req.uri().path() == "/t7-redirect" {
+                let mut resp = EdgeResponse::with_status(StatusCode::FOUND, "");
+                resp.headers_mut()
+                    .insert("location", "/t7-target".parse().unwrap());
+                Ok(resp)
+            } else {
+                Ok(EdgeResponse::ok("redirect target"))
+            }
+        })
+        .build()
+        .context();
+    let router = edge_conformance::build_router().unwrap();
+    let req = http::Request::builder()
+        .uri("/t7")
+        .body(Default::default())
+        .unwrap();
+    let resp = router.handle(req, &mut ctx).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "/t7-target");
+}
+
+#[tokio::test]
+async fn t11_sequential_fetches_both_succeed() {
+    // Two awaited fetches in sequence (SPEC §11 T11): the Fastly poll-loop
+    // executor must drive both to completion, and each hop must be
+    // independent (distinct paths).
+    let resp = call("/t11").await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let first: serde_json::Value = serde_json::from_str(json["first"].as_str().unwrap()).unwrap();
+    let second: serde_json::Value = serde_json::from_str(json["second"].as_str().unwrap()).unwrap();
+    assert_eq!(first["host"], "api.example.com");
+    assert_eq!(first["path"], "/t11-first");
+    assert_eq!(second["host"], "api.example.com");
+    assert_eq!(second["path"], "/t11-second");
 }
 
 #[tokio::test]

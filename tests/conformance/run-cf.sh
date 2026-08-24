@@ -17,6 +17,7 @@ HELLO_DIR="$ROOT/examples/hello-world"
 
 ORIGIN_PORT=18080
 CONF_PORT=8788
+CONF_T6_PORT=8789
 HELLO_PORT=8787
 
 PIDS=()
@@ -49,6 +50,14 @@ sleep 1
 say "starting conformance service on :$CONF_PORT"
 setsid nohup workerd serve "$CONF_DIR/workerd-conformance.capnp" \
     > /tmp/edge-conf-workerd.log 2>&1 < /dev/null &
+PIDS+=($!)
+sleep 2
+
+# T6 instance: same worker, but globalOutbound points at a dead port so
+# every fetch rejects (D16: CF surfaces rejections as Connection).
+say "starting T6 conformance service on :$CONF_T6_PORT"
+setsid nohup workerd serve "$CONF_DIR/workerd-conformance-t6.capnp" \
+    > /tmp/edge-conf-t6-workerd.log 2>&1 < /dev/null &
 PIDS+=($!)
 sleep 2
 
@@ -105,6 +114,39 @@ assert_json 'd["host"]' 'api.example.com' "http://127.0.0.1:$CONF_PORT/t4"
 assert_json 'd["path"]' '/t4-origin' "http://127.0.0.1:$CONF_PORT/t4"
 assert_json 'd["query"]' 'from=t4' "http://127.0.0.1:$CONF_PORT/t4"
 echo "  T4 OK"
+
+# --- T5: undeclared host — fail-open on CF (documented, SPEC §7.5) ---------------
+# Fastly fails closed (asserted in run.sh); on CF any URL is fetchable, so
+# the same handler reaches the (echo) origin and reports ok.
+say "T5 fetch to undeclared host (CF fail-open, documented)"
+assert_json 'd["outcome"]' 'ok' "http://127.0.0.1:$CONF_PORT/t5"
+echo "  T5 OK"
+
+# --- T6: refused outbound surfaces as Connection (D16) ---------------------------
+say "T6 fetch error surface"
+assert_json 'd["outcome"]' 'error' "http://127.0.0.1:$CONF_T6_PORT/t6"
+assert_json 'd["category"]' 'Connection' "http://127.0.0.1:$CONF_T6_PORT/t6"
+echo "  T6 OK"
+
+# --- T7: redirects are never auto-followed (D5.2) ---------------------------------
+say "T7 redirect not followed"
+out="$(curl -s -i -m 10 "http://127.0.0.1:$CONF_PORT/t7")"
+grep -q "302" <<<"$out" || fail "T7: expected 302 passthrough, got: $(head -1 <<<"$out")"
+grep -qi '^location: /t7-target' <<<"$out" || fail "T7: missing Location: /t7-target"
+echo "  T7 OK"
+
+# --- T11: sequential fetches ------------------------------------------------------
+say "T11 sequential fetches"
+out="$(curl -s -m 10 "http://127.0.0.1:$CONF_PORT/t11")"
+python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+first = json.loads(d["first"])
+second = json.loads(d["second"])
+assert first["host"] == "api.example.com" and first["path"] == "/t11-first", first
+assert second["host"] == "api.example.com" and second["path"] == "/t11-second", second
+' <<<"$out" || fail "T11: sequential fetch assertions failed (body: $out)"
+echo "  T11 OK"
 
 # --- hello-world smoke ------------------------------------------------------------
 say "hello-world routes"

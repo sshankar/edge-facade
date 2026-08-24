@@ -3,6 +3,7 @@
 **Status:** Draft v0.1
 **Scope:** A Rust SDK for writing one worker/service that deploys to both Cloudflare Workers and Fastly Compute.
 **Platform SDKs bridged:** `worker` (workers-rs) v0.8.5 · `fastly` v0.13.0
+**Companion:** `SPEC-PORTABILITY-PRIMITIVES.md` (draft v0.2) extends this spec with runtime portability primitives — deferred work, deadlines, client metadata, structured log fields, rate limiting, scheduled events. Tracked as milestones M7+ in §12.
 
 ---
 
@@ -25,6 +26,8 @@ The SDK provides:
 ## 2. Non-goals (v1)
 
 WebSockets, Durable Objects, Queues, R2, D1, Fanout, image optimizer, device detection, scheduled/cron events, streaming request/response bodies, platform-specific geo and cache APIs, HTTP/2 push, service bindings. Anything listed here is excluded unless a later version explicitly adopts it.
+
+**Supersession (draft v0.2):** `SPEC-PORTABILITY-PRIMITIVES.md` adopts *scheduled/cron events* and *client metadata (geo, network, TLS)* as portable primitives, superseding the exclusions above to the extent described there (§5, §8). Streaming request/response bodies and platform-specific cache APIs remain excluded.
 
 ## 3. Ground truth — capability matrix (verified against SDK source)
 
@@ -363,15 +366,25 @@ A shared suite compiled natively (mock context), under Viceroy, and under worker
 
 ## 12. Milestones & acceptance criteria
 
+M0–M6 deliver the v1 core of this document. M7+ deliver the runtime portability primitives of `SPEC-PORTABILITY-PRIMITIVES.md` (draft v0.2) in that document's delivery order (§12 there): the wake-capable Fastly executor and monotonic clock come first — they unblock timeouts and deferred work on Fastly — then fetch behavior, deferred work, client metadata, structured log fields, rate limiting, and optional scheduled delivery. P1–P15 are the portability conformance scenarios; each M7+ row's exit criteria name the P-tests that gate it.
+
 | M | Deliverable | Exit criteria | Status |
 |---|---|---|---|
 | M0 | `edge-core` (types, Context trait, Error, Router) + native mock context | T1–T3, T7, T9 pass natively | ✅ done (2026-08-21) |
 | M1 | `edge-fastly` adapter + `edge-macros` | hello-world + T1–T3 pass under Viceroy, then live Fastly | ✅ done (2026-08-21): T1–T4 + hello-world pass under Viceroy (see PLAN-M1); live Fastly deploy pending account access |
 | M2 | `edge-cloudflare` adapter | hello-world + T1–T3 pass under workerd, then live CF | ✅ done (2026-08-22): T1–T4 + hello-world pass under workerd (see PLAN-M2); live CF deploy pending account access |
-| M3 | Fetch resolver (static map + dynamic fallback) + parity rules | T4–T6, T11 on both platforms; Host parity verified empirically | resolver policy done (M1); parity verification pending |
+| M3 | Fetch resolver (static map + dynamic fallback) + parity rules | T4–T6, T11 on both platforms; Host parity verified empirically | ✅ done (2026-08-24): T4–T7, T11 pass on host + Viceroy + workerd (see PLAN-M3); redirect-manual bug found & fixed (D5.2); live Fastly dynamic-backend check pending account |
 | M4 | Config vars/secrets + KV | T7, T8 on both | — |
 | M5 | Router, logging, `edge-cli`, conformance CI matrix, docs | full suite green on host + Viceroy + workerd; CI on both wasm targets | — |
-| M6 (optional) | caching, geo, streaming bodies | — | — |
+| M6 (optional) | streaming bodies (caching → M14, geo → M10) | — | — |
+| M7 | Wake-capable Fastly executor + monotonic clock + deadline API (`Context::timeout`/`elapsed`/`remaining`, `TimeoutScope`). Supersedes the D3 poll-loop on Fastly (parking, timer wakeups, handler+timer concurrency, response committed before deferred drain) | executor parks rather than busy-spins; timer-driven wakes; P5, P6 on host + Viceroy + workerd | — |
+| M8 | Fetch options: `Context::fetch_with` (`FetchOptions::timeout`, `ClientDisconnectPolicy::Ignore`) | P3, P4 on both platforms | — |
+| M9 | Deferred work: `Context::wait_until` + deterministic `drain_deferred()` on the mock context | P1, P2 on host + Viceroy + workerd | — |
+| M10 | Client metadata: `Context::client()` → owned `ClientMetadata` snapshot (geo, network, TLS, original header names, `EdgeProvider`) | P7, P8 on both platforms | — |
+| M11 | Structured logging fields: `set_log_field`/`remove_log_field`; CF control-header strip; Fastly log-endpoint record | P9–P11 on both platforms | — |
+| M12 | Rate limiting: `RateLimiter`, `[rate_limits.*]` config, codegen for CF bindings and Fastly counters/penalty boxes | P13, P14 on both platforms; config validation rejects unsupported periods/mitigations | — |
+| M13 (optional) | Scheduled events: `#[edge::scheduled]` + Fastly authenticated-HTTP delivery harness | P15 under workerd + Fastly harness; edge-cli validation fails when a schedule lacks Fastly delivery | — |
+| M14 (optional) | KV-backed dictionaries: `DictionaryStore` application library (no new facade primitive) | P12 on both platforms; cache/prewarm only after measurement | — |
 
 ## 13. Decision log
 
@@ -403,7 +416,7 @@ Record of load-bearing design decisions. Each entry states the decision, the alt
 
 ### D3. Immediate-resolution async on Fastly (no executor in v1)
 
-- **Status:** Accepted (with documented constraint)
+- **Status:** Accepted (with documented constraint); **superseded for M7+** by `SPEC-PORTABILITY-PRIMITIVES.md` §4.1 (wake-capable executor, monotonic timers, deadlines)
 - **Decision:** The Fastly adapter drives the async handler with a minimal poll-loop executor whose futures never return `Pending` in practice, because every `Context` method is implemented over blocking host calls (`send`/`wait`, sync KV).
 - **Alternatives:** (a) Build a real `fastly::async_io::select`-based scheduler; (b) make the common handler synchronous and block only on CF.
 - **Rationale:** `#[fastly::main]` is synchronous and the SDK ships no executor; its async model is handle-based (`send_async` → `PendingRequest::wait()` blocks). Fastly runs one instance per request, so per-request concurrency is not available to user code anyway. A CF-only-sync handler was rejected because CF `fetch` is inherently async (Promise-based) and cannot be blocked on synchronously.

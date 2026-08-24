@@ -104,6 +104,39 @@ assert_json 'd["path"]' '/t4-origin' "http://127.0.0.1:$CONF_PORT/t4"
 assert_json 'd["query"]' 'from=t4' "http://127.0.0.1:$CONF_PORT/t4"
 echo "  T4 OK"
 
+# --- T5: undeclared host fails closed (D4) ------------------------------------
+say "T5 fetch to undeclared host"
+assert_json 'd["outcome"]' 'error' "http://127.0.0.1:$CONF_PORT/t5"
+assert_json 'd["category"]' 'UnresolvedBackend' "http://127.0.0.1:$CONF_PORT/t5"
+assert_json 'd["host"]' 'undeclared.example.com' "http://127.0.0.1:$CONF_PORT/t5"
+echo "  T5 OK"
+
+# --- T6: refused origin surfaces as Connection (error-surface parity) ---------
+say "T6 fetch error surface"
+assert_json 'd["outcome"]' 'error' "http://127.0.0.1:$CONF_PORT/t6"
+assert_json 'd["category"]' 'Connection' "http://127.0.0.1:$CONF_PORT/t6"
+echo "  T6 OK"
+
+# --- T7: redirects are never auto-followed (D5.2) -----------------------------
+say "T7 redirect not followed"
+out="$(curl -s -i -m 10 "http://127.0.0.1:$CONF_PORT/t7")"
+grep -q "302" <<<"$out" || fail "T7: expected 302 passthrough, got: $(head -1 <<<"$out")"
+grep -qi '^location: /t7-target' <<<"$out" || fail "T7: missing Location: /t7-target"
+echo "  T7 OK"
+
+# --- T11: sequential fetches (D3 executor contract) ---------------------------
+say "T11 sequential fetches"
+out="$(curl -s -m 10 "http://127.0.0.1:$CONF_PORT/t11")"
+python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+first = json.loads(d["first"])
+second = json.loads(d["second"])
+assert first["host"] == "api.example.com" and first["path"] == "/t11-first", first
+assert second["host"] == "api.example.com" and second["path"] == "/t11-second", second
+' <<<"$out" || fail "T11: sequential fetch assertions failed (body: $out)"
+echo "  T11 OK"
+
 # --- hello-world smoke -------------------------------------------------------
 say "hello-world routes"
 body="$(curl -s "http://127.0.0.1:$HELLO_PORT/")"

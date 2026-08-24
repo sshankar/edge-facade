@@ -63,6 +63,23 @@ pub enum PathError {
     InvalidPattern(String),
 }
 
+impl FetchError {
+    /// The category name, stable for serialization and cross-platform
+    /// assertions (SPEC §11 T6: same `FetchError` category on both
+    /// platforms).
+    pub fn category(&self) -> &'static str {
+        match self {
+            FetchError::UnresolvedBackend(_) => "UnresolvedBackend",
+            FetchError::Connection(_) => "Connection",
+            FetchError::Tls(_) => "Tls",
+            FetchError::Timeout => "Timeout",
+            FetchError::Permission => "Permission",
+            FetchError::BadRequest(_) => "BadRequest",
+            FetchError::Platform(_) => "Platform",
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -168,6 +185,23 @@ mod tests {
             "kv failed: boom"
         );
         assert_eq!(Error::Internal("x".into()).to_string(), "internal error: x");
+    }
+
+    #[test]
+    fn category_names_are_stable() {
+        assert_eq!(
+            FetchError::UnresolvedBackend("h".into()).category(),
+            "UnresolvedBackend"
+        );
+        assert_eq!(
+            FetchError::Connection("x".into()).category(),
+            "Connection"
+        );
+        assert_eq!(FetchError::Timeout.category(), "Timeout");
+        assert_eq!(FetchError::Permission.category(), "Permission");
+        assert_eq!(FetchError::BadRequest("x".into()).category(), "BadRequest");
+        assert_eq!(FetchError::Tls("x".into()).category(), "Tls");
+        assert_eq!(FetchError::Platform("x".into()).category(), "Platform");
     }
 
     #[test]
