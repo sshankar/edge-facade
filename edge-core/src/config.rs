@@ -140,6 +140,15 @@ pub struct Stores {
     pub secrets: Option<String>,
 }
 
+impl Stores {
+    /// Number of declared bindings (for `edge-cli check` reporting).
+    pub fn binding_count(&self) -> usize {
+        usize::from(self.kv.is_some())
+            + usize::from(self.config.is_some())
+            + usize::from(self.secrets.is_some())
+    }
+}
+
 /// Logging configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Logging {

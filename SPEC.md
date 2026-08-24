@@ -257,8 +257,8 @@ dynamic_backends = false          # MUST be explicit
 ```
 
 `edge-cli` codegen produces, from this file:
-- `fastly.toml`: `[setup.backends]` (`api_backend` with `override_host = "api.example.com"`, SSL on) and `[setup.kv_store]`/config-store entries.
-- `wrangler.toml`: KV namespace binding `edge_kv`, vars, and the fetch permission/allowlist derived from `[origins]` (exact binding syntax per §14 open question 1).
+- `fastly.toml`: `[setup.backends]` (keyed by backend name, each with `override_host = "<url host>"` and `use_ssl` per scheme) plus `[setup.kv_store]`/config/secret-store entries and `[logging]` endpoints. An existing `[local_server]` section is preserved (Viceroy testing config).
+- `wrangler.toml`: `main = "build/index.js"`, `compatibility_date`, and a `[[kv_namespaces]]` binding per `[stores] kv` — without an `id` (wrangler auto-provisions and writes ids back on deploy). Vars/secrets are configured per-environment, not generated (secrets via `wrangler secret put`). No fetch-permission config is emitted: wrangler has no allowlist key (see §14 open question 1).
 
 The same map is embedded in the binary at build time (via a `build.rs`-generated module or `include_str!` + a `serde` deserializer) for runtime resolution. The runtime map is the **primary** resolution source on Fastly; it is authoritative and MUST match `fastly.toml`.
 
@@ -375,7 +375,7 @@ M0–M6 deliver the v1 core of this document. M7+ deliver the runtime portabilit
 | M2 | `edge-cloudflare` adapter | hello-world + T1–T3 pass under workerd, then live CF | ✅ done (2026-08-22): T1–T4 + hello-world pass under workerd (see PLAN-M2); live CF deploy pending account access |
 | M3 | Fetch resolver (static map + dynamic fallback) + parity rules | T4–T6, T11 on both platforms; Host parity verified empirically | ✅ done (2026-08-24): T4–T7, T11 pass on host + Viceroy + workerd (see PLAN-M3); redirect-manual bug found & fixed (D5.2); live Fastly dynamic-backend check pending account |
 | M4 | Config vars/secrets + KV | T7, T8 on both | ✅ done (2026-08-24): T7/T8 pass on host + Viceroy + workerd (see PLAN-M4); CF adapter config-aware (default KV handle via edge.toml); workerd KV harness + config-driven hello-world |
-| M5 | Router, logging, `edge-cli`, conformance CI matrix, docs | full suite green on host + Viceroy + workerd; CI on both wasm targets | — |
+| M5 | Router, logging, `edge-cli`, conformance CI matrix, docs | full suite green on host + Viceroy + workerd; CI on both wasm targets | ✅ done (2026-08-24): `edge-cli` generate/check + CI matrix + docs (see PLAN-M5); suite green on all three targets; §14#1 resolved (no fetch-permission key in wrangler) |
 | M6 (optional) | streaming bodies (caching → M14, geo → M10) | — | — |
 | M7 | Wake-capable Fastly executor + monotonic clock + deadline API (`Context::timeout`/`elapsed`/`remaining`, `TimeoutScope`). Supersedes the D3 poll-loop on Fastly (parking, timer wakeups, handler+timer concurrency, response committed before deferred drain) | executor parks rather than busy-spins; timer-driven wakes; P5, P6 on host + Viceroy + workerd | — |
 | M8 | Fetch options: `Context::fetch_with` (`FetchOptions::timeout`, `ClientDisconnectPolicy::Ignore`) | P3, P4 on both platforms | — |
@@ -583,7 +583,7 @@ Record of load-bearing design decisions. Each entry states the decision, the alt
 
 ## 14. Open questions & risks
 
-1. **CF fetch permission syntax:** current `wrangler.toml` binding for fetch allowlist/`unsafe` fetch (v1.3+ permission model) — verify and encode in `edge-cli`.
+1. **CF fetch permission syntax:** resolved 2026-08-24 — verified against wrangler 4.125.0's `config-schema.json`: no `permissions`/fetch-allowlist key exists (only generic `unsafe.bindings`). Outbound `fetch` is allow-by-default on Workers; `edge-cli` emits no permission config. The fail-closed Fastly asymmetry (§7.5) remains documented, not configurable, on CF.
 2. **Fastly Host/SNI semantics:** exact behavior of `send()` w.r.t. `Host` header when `override_host` unset — must be empirically confirmed in M3 (Viceroy echo origin).
 3. **Dynamic backends:** per-service enablement; creation cost per session; whether `enable_pooling`/`max_use` should be surfaced in config.
 4. **KV limits:** exact Fastly KV value size limit; decide local reject vs pass-through.

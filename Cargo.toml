@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["edge-core", "edge-macros", "edge-fastly", "edge-cloudflare", "examples/hello-world", "tests/conformance"]
+members = ["edge-core", "edge-macros", "edge-fastly", "edge-cloudflare", "edge-cli", "examples/hello-world", "tests/conformance"]
 # Service crates require an explicit platform feature (SPEC §6.2: neither
 # feature is a compile error), so the default root build covers the library
 # crates only.
-default-members = ["edge-core", "edge-macros", "edge-fastly", "edge-cloudflare", "tests/conformance"]
+default-members = ["edge-core", "edge-macros", "edge-fastly", "edge-cloudflare", "edge-cli", "tests/conformance"]
 
 [workspace.package]
 edition = "2021"

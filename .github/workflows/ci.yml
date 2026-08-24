@@ -1,0 +1,78 @@
+# Edge SDK CI (SPEC §12, M5): host tests + both wasm targets + the two
+# simulator harnesses (Viceroy for Fastly, workerd for Cloudflare).
+#
+# Every conformance scenario (T1–T8, r1, T11) must pass identically on the
+# host (mock), under Viceroy, and under workerd — see tests/conformance/.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  host:
+    name: host (tests + lint + edge-cli)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo fmt --check
+      - run: cargo doc --workspace --no-deps
+      # edge-cli: generate + check against the real service configs.
+      - run: cargo run -p edge-cli -- generate --edge-toml examples/hello-world/edge.toml --out-dir /tmp/hw
+      - run: cargo run -p edge-cli -- check --edge-toml examples/hello-world/edge.toml --fastly-toml examples/hello-world/fastly.toml
+      - run: cargo run -p edge-cli -- check --edge-toml tests/conformance/edge.toml --fastly-toml tests/conformance/fastly.toml
+
+  wasm:
+    name: wasm builds (both targets, both feature sets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1, wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # Fastly: wasip1, --features fastly
+      - run: cargo build -p conformance --features fastly --target wasm32-wasip1
+      - run: cargo build -p hello-world --features fastly --target wasm32-wasip1
+      # Cloudflare: wasm32-unknown-unknown, --features cloudflare
+      - run: cargo build -p conformance --features cloudflare --target wasm32-unknown-unknown
+      - run: cargo build -p hello-world --features cloudflare --target wasm32-unknown-unknown
+
+  viceroy:
+    name: conformance under Viceroy (Fastly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked viceroy
+      - run: tests/conformance/run.sh
+
+  workerd:
+    name: conformance under workerd (Cloudflare)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @cloudflare/workerd
+      - run: cargo install worker-build
+      - run: tests/conformance/run-cf.sh
