@@ -1,0 +1,13 @@
+error: couldn't read `$WORKSPACE/target/tests/trybuild/edge-macros/edge.toml`: No such file or directory (os error 2)
+  --> tests/ui/both_features.rs:10:1
+   |
+10 | #[edge_core::main]
+   | ^^^^^^^^^^^^^^^^^^
+
+error: edge_core::main: the `fastly` and `cloudflare` features are mutually exclusive; enable exactly one
+  --> tests/ui/both_features.rs:10:1
+   |
+10 | #[edge_core::main]
+   | ^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `edge_core::main` (in Nightly builds, run with -Z macro-backtrace for more info)

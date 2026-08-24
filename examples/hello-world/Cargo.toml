@@ -1,0 +1,33 @@
+[package]
+name = "hello-world"
+version = "0.1.0"
+description = "One handler, deployed to both Cloudflare Workers and Fastly Compute (SPEC §1)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "hello_world"
+# cdylib is required by worker-build (Cloudflare export surface); rlib lets
+# the Fastly bin link the same handler.
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "hello-world"
+path = "src/main.rs"
+required-features = ["fastly"]
+
+[features]
+# Exactly one platform feature MUST be enabled (SPEC §6.2); they are
+# mutually exclusive.
+fastly = ["dep:edge-fastly"]
+cloudflare = ["dep:edge-cloudflare", "dep:wasm-bindgen"]
+
+[dependencies]
+edge-core = { path = "../../edge-core" }
+edge-fastly = { path = "../../edge-fastly", optional = true }
+edge-cloudflare = { path = "../../edge-cloudflare", optional = true }
+# Direct dep for the wasm-bindgen glue the entry macro expands under
+# `--features cloudflare` (same version as `worker`'s, unified by semver).
+wasm-bindgen = { version = "0.2", optional = true }

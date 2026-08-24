@@ -1,0 +1,26 @@
+[package]
+name = "edge-core"
+version = "0.1.0"
+description = "Platform-agnostic core for the Edge SDK (Cloudflare Workers + Fastly Compute)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bytes.workspace = true
+edge-macros = { path = "../edge-macros" }
+futures-util.workspace = true
+http.workspace = true
+matchit = "0.7"
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.8"
+url.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

@@ -1,0 +1,107 @@
+# M1 Implementation Plan — `edge-macros` + `edge-fastly` adapter
+
+**Status: ✅ COMPLETE (2026-08-21)** — all acceptance criteria met: `#[edge_core::main]` + Fastly adapter implemented; conformance T1–T4 **and** hello-world pass under Viceroy; 52 host tests green; clippy `-D warnings` clean; fmt clean; both wasm targets check clean.
+
+**Goal (spec §12, M1):** `edge-fastly` adapter + `edge-macros`, such that hello-world and T1–T3 pass under Viceroy, then live Fastly.
+
+**Definition of done:**
+- `#[edge_core::main]` macro (feature-selected fastly/cloudflare entry, §6.2) with clear compile errors for both/neither features.
+- `edge-fastly` adapter: request/response conversion with buffered bodies (D2), `Context` from embedded config, §7.3 host→backend resolution (static + opt-in dynamic), §6.4 error mapping, log endpoint with stderr fallback, poll-loop executor (§8.3).
+- hello-world example builds for `wasm32-wasip1 --features fastly`.
+- Shared conformance suite (`tests/conformance`): scenarios compiled natively (mock context) **and** run under Viceroy; T1–T4 + hello-world green.
+
+---
+
+## 1. What was built
+
+```
+edge/
+├── Cargo.toml                # members + default-members (services need explicit platform feature)
+├── edge-core/src/config.rs   # NEW: edge.toml schema + validation + Resolution policy (§7.3)
+├── edge-macros/              # NEW: #[edge_core::main] proc macro (+ trybuild + unit tests)
+├── edge-fastly/              # NEW: Fastly adapter (fastly = "=0.13.0")
+│   └── src/{lib,convert,drive,resolve,platform,kv}.rs
+├── examples/hello-world/     # NEW: shared handler + edge.toml + fastly.toml
+└── tests/conformance/        # NEW: shared scenarios (lib) + fastly bin + native driver + run.sh
+```
+
+## 2. Deviations from SPEC (back-ported to SPEC §13, D9–D15)
+
+1. **D9 — `edge.toml` embedding is the macro's job.** `#[edge_core::main]` emits
+   `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/edge.toml"))` in the fastly branch, so the
+   runtime map is embedded at build time exactly as §7.2 requires, with no build.rs. Consequence:
+   the service crate must have `edge.toml` at its root, and trybuild fixtures cannot exercise the
+   fastly-positive path (include target doesn't exist in trybuild's temp project) — that path is
+   covered by hello-world + conformance builds.
+2. **D10 — resolution *policy* lives in `edge-core::config::Resolution`.** The §7.3 chain (static
+   match → dynamic fallback iff `[fastly] dynamic_backends` → fail closed) is pure decision logic
+   and belongs with the shared config model; `edge-fastly::resolve` maps decisions onto
+   `Backend::from_name`/`Backend::builder` + the per-session cache. This also makes the chain
+   host-testable (edge-fastly itself cannot run tests on the host — see D14). `edge-core` gains a
+   `toml` dependency (the first addition to the §3 dependency list; no platform deps added, so the
+   quarantine principle is untouched).
+3. **D11 — schema bindings for vars/secrets.** The v0.1 schema only had `[stores] kv`; M1 adds
+   `[stores] config` and `[stores] secrets` binding names (values live in platform configs, per §9).
+   Missing `[fastly] dynamic_backends` is a validation error (MUST be explicit, D4).
+4. **D12 — adapter-level error handling.** `edge_fastly::serve` is infallible in practice: every
+   failure becomes a client response. `Error::Router(PathError::NotFound)` → **404** (per
+   PLAN-M0 §2's promise); everything else → 500 with the error string (`fastly::main` convention).
+   The generated `fn main() -> std::result::Result<(), edge_fastly::Error>` keeps the spec shape
+   (`edge_fastly::Error` re-exports `fastly::Error`, i.e. anyhow).
+5. **D13 — cloudflare feature declared but unwired.** Service crates declare `cloudflare = []` so
+   the macro's `#[cfg(feature = ...)]` gates are known to cargo (no `unexpected_cfgs` warnings) and
+   to signal M2 wiring. The macro emits the §6.2 cloudflare branch referencing `edge_cloudflare`
+   (inert until M2; enabling `cloudflare` before then is a compile error, which is honest).
+6. **D14 — edge-fastly has no host-run tests.** The `fastly` crate's hostcalls
+   (`register_dynamic_backend` et al.) are undefined symbols on native; once any test reaches them,
+   the test binary fails to link. Policy logic is therefore tested in `edge-core`; transport is
+   tested under Viceroy (T4). Keep it this way; do not add host tests touching fastly hostcalls.
+7. **D15 — `[local_server]` in hand-written fastly.toml.** Viceroy reads `[local_server]`
+   (backends with `override_host`, config/kv/secret stores). `[setup]` is the deploy-time section
+   edge-cli will generate (M5); both are hand-maintained for M1. Logging endpoints: Viceroy accepts
+   arbitrary endpoint names and prints them prefixed (verified: `hello_logging :: [info] ...`);
+   the adapter still falls back to `eprintln!` if the endpoint is unavailable.
+
+## 3. Test plan (all green)
+
+| Target | What | Result |
+|---|---|---|
+| Host | `cargo test` — edge-core (22), edge-macros (4 unit + 1 trybuild), conformance native (T1–T4, incl. fail-closed) | 52 passed |
+| Viceroy | `tests/conformance/run.sh` — T1 echo, T2 status/UTF-8, T3 router/404, T4 fetch Host-parity, hello-world routes | all passed |
+| wasm | `cargo check` edge-core on `wasm32-unknown-unknown` + `wasm32-wasip1`; edge-fastly/hello-world/conformance on `wasm32-wasip1` | clean |
+| Lints | clippy `-D warnings` (all 5 crates), `cargo fmt --check`, `cargo doc` | clean |
+
+**Not yet testable:** live Fastly deploy (no account in this environment) and the dynamic-backend
+path (Viceroy-side dynamic backends need M3's tests). Both are noted for M3.
+
+## 4. How to run
+
+```bash
+# Host tests (core + macros + native conformance)
+cargo test
+
+# Fastly build
+cargo build -p hello-world --features fastly --target wasm32-wasip1
+cargo build -p conformance --features fastly --target wasm32-wasip1
+
+# Conformance under Viceroy (viceroy on PATH)
+tests/conformance/run.sh
+```
+
+## 5. Risks & notes for M2/M3
+
+- **M2** must replace the cloudflare branch's placeholder (`edge_cloudflare::serve_fetch`) and wire
+  `cloudflare = ["dep:edge-cloudflare"]` in service crates. The both-features trybuild fixture
+  becomes constructible then.
+- **M3** owns T5/T6/T11: undeclared-host behavior, error-surface parity, sequential fetches; the
+  dynamic-backend path here is code-complete but only policy-tested — verify against live Fastly /
+  Viceroy dynamic-backend support.
+- **Keep D14 in mind** when adding tests to edge-fastly: host tests are a link-time trap.
+- The `edge-fastly` `#[doc(hidden)]`-less SPI surface (`Context::from_platform`,
+  `KvStore::from_backend`, `KvValue::from_body`) is used as designed.
+
+## 6. Explicitly out of scope for M1
+
+`edge-cloudflare` (M2), `edge-cli` codegen (M5), real config stores / secrets / KV in the
+conformance suite (M4), T5/T6/T10/T11, dynamic-backend runtime testing, live Fastly deploy, CI
+matrix (M5), streaming.

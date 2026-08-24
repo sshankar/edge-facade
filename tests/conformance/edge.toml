@@ -1,0 +1,22 @@
+# edge.toml — single source of truth for the conformance service (SPEC §7.2).
+# Embedded in the binary at build time by #[edge_core::main].
+
+[service]
+name = "conformance"
+
+[origins]
+# Declared origin for T4 (Host-parity test). The backend must match
+# fastly.toml ([local_server.backends] for Viceroy; [setup.backends] when
+# generated for deployment).
+api = { url = "http://api.example.com", backend = "api_backend" }
+
+[stores]
+# Declared for parity with the full schema; T7/T8 (vars/secrets/KV) land in
+# M4, so Viceroy config for these arrives then.
+kv = "edge_kv"
+
+[logging]
+endpoint = "conformance_logging"
+
+[fastly]
+dynamic_backends = false

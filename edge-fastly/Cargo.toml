@@ -1,0 +1,16 @@
+[package]
+name = "edge-fastly"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Fastly Compute adapter for the Edge SDK"
+
+[dependencies]
+edge-core = { path = "../edge-core" }
+# Lockstep-pinned Fastly SDK (SPEC §5).
+fastly = "=0.13.0"
+
+bytes = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }

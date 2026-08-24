@@ -1,0 +1,7 @@
+error: edge_core::main requires exactly one platform feature; enable `--features fastly` or `--features cloudflare` on the service crate
+  --> tests/ui/neither_feature.rs:10:1
+   |
+10 | #[edge_core::main]
+   | ^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `edge_core::main` (in Nightly builds, run with -Z macro-backtrace for more info)

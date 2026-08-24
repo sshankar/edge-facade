@@ -1,0 +1,22 @@
+[package]
+name = "edge-cloudflare"
+version = "0.1.0"
+description = "Cloudflare Workers adapter for the Edge SDK"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+edge-core = { path = "../edge-core" }
+# Pinned workers-rs SDK (SPEC §5); the `http` feature provides the
+# http::Request/Response bridge helpers used at the adapter boundary.
+worker = { version = "0.8.5", features = ["http"] }
+
+bytes = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+http-body-util = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = "0.3"

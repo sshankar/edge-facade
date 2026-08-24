@@ -1,0 +1,36 @@
+[package]
+name = "conformance"
+version = "0.1.0"
+description = "Shared conformance suite for the Edge SDK (SPEC §11): identical behavior on host (mock), Viceroy, and workerd"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# The scenario library is platform-agnostic and compiles without features.
+name = "edge_conformance"
+# cdylib is required by worker-build for the Cloudflare run (the `fetch`
+# export lives in `mod entry`, gated on `cloudflare`).
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "conformance-fastly"
+path = "src/bin/fastly.rs"
+required-features = ["fastly"]
+
+[features]
+fastly = ["dep:edge-fastly"]
+cloudflare = ["dep:edge-cloudflare", "dep:wasm-bindgen"]
+
+[dependencies]
+edge-core = { path = "../../edge-core" }
+edge-fastly = { path = "../../edge-fastly", optional = true }
+edge-cloudflare = { path = "../../edge-cloudflare", optional = true }
+http = { workspace = true }
+serde = { workspace = true }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }

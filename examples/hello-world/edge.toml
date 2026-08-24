@@ -1,0 +1,22 @@
+# edge.toml — single source of truth (SPEC §7.2). edge-cli (M5) generates
+# wrangler.toml + fastly.toml from this; the same content is embedded in the
+# binary for runtime resolution.
+
+[service]
+name = "hello-world"
+
+[origins]
+# Declared origins become fetchable hosts. `backend` must match the backend
+# generated into fastly.toml (SPEC §7.2).
+# api = { url = "https://api.example.com", backend = "api_backend" }
+
+[stores]
+kv = "hello_kv"
+
+[logging]
+endpoint = "hello_logging"
+
+[fastly]
+# Fail-closed default: undeclared fetch hosts are an error unless dynamic
+# backends are explicitly enabled (SPEC D4). MUST be explicit.
+dynamic_backends = false
