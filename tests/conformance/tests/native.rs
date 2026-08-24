@@ -47,7 +47,8 @@ async fn t1_echo_round_trips() {
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
     assert_eq!(resp.status(), 200);
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["method"], "GET");
     assert_eq!(json["path"], "/t1");
     assert_eq!(json["query"], "q=1&q=2");
@@ -60,13 +61,17 @@ async fn t2_response_is_identical() {
     let resp = call("/t2").await.unwrap();
     assert_eq!(resp.status(), 201);
     assert_eq!(resp.headers()["x-conformance"], "yes");
-    assert_eq!(resp.body(), &b"h\xc3\xa9llo \xe4\xb8\x96\xe7\x95\x8c"[..]);
+    assert_eq!(
+        resp.body().as_bytes(),
+        Some(&b"h\xc3\xa9llo \xe4\xb8\x96\xe7\x95\x8c"[..])
+    );
 }
 
 #[tokio::test]
 async fn t3_router_params_and_404() {
     let resp = call("/t3/hello/alice?q=hi").await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["name"], "alice");
     assert_eq!(json["query_q"], "q=hi");
 
@@ -88,7 +93,8 @@ async fn t3_router_params_and_404() {
 async fn t4_fetch_reaches_declared_origin() {
     let resp = call("/t4").await.unwrap();
     assert_eq!(resp.status(), 200);
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     // The mock origin sees the URL host; the real origin under Viceroy sees
     // the same via override_host (D5.1).
     assert_eq!(json["host"], "api.example.com");
@@ -106,7 +112,8 @@ async fn t5_undeclared_host_fails_closed_without_handler() {
         .body(Default::default())
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["outcome"], "error");
     assert_eq!(json["category"], "UnresolvedBackend");
     assert_eq!(json["host"], "undeclared.example.com");
@@ -117,7 +124,8 @@ async fn t5_undeclared_host_succeeds_with_handler() {
     // With a handler installed (mock_origin answers any host) the fetch
     // succeeds — the documented CF behavior (SPEC §7.5: fail open).
     let resp = call("/t5").await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["outcome"], "ok");
 }
 
@@ -133,7 +141,8 @@ async fn t6_refused_origin_surfaces_connection_category() {
         .body(Default::default())
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["outcome"], "error");
     assert_eq!(json["category"], "Connection");
 }
@@ -178,7 +187,8 @@ async fn t7_config_values_and_missing_none() {
         .body(Default::default())
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["greeting"], "Hello");
     assert_eq!(json["api_key"], "s3cret");
     assert_eq!(json["missing"], true);
@@ -187,7 +197,8 @@ async fn t7_config_values_and_missing_none() {
 #[tokio::test]
 async fn t8_kv_round_trip_on_mock() {
     let resp = call("/t8").await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(json["text"], "hello 世界");
     assert_eq!(json["missing"], true);
     assert_eq!(json["after_delete"], true);
@@ -200,7 +211,8 @@ async fn t11_sequential_fetches_both_succeed() {
     // executor must drive both to completion, and each hop must be
     // independent (distinct paths).
     let resp = call("/t11").await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     let first: serde_json::Value = serde_json::from_str(json["first"].as_str().unwrap()).unwrap();
     let second: serde_json::Value = serde_json::from_str(json["second"].as_str().unwrap()).unwrap();
     assert_eq!(first["host"], "api.example.com");
@@ -225,4 +237,66 @@ async fn t4_fetch_missing_origin_fails_closed() {
         edge_core::Error::Fetch(edge_core::FetchError::UnresolvedBackend(h))
             if h == "api.example.com"
     ));
+}
+
+#[tokio::test]
+async fn t12_streaming_relay_preserves_content() {
+    // Mock origin serves /t12-origin as a multi-chunk stream; the handler
+    // consumes exactly one chunk and relays the rest (SPEC §11 T12). The
+    // relayed body must equal the origin payload minus the first chunk, and
+    // the `x-t12-first-chunk` header must report that chunk's length.
+    use bytes::Bytes;
+    use edge_core::Body;
+
+    let chunks = vec![
+        Bytes::from_static(b"first-chunk-"),
+        Bytes::from_static(b"second-chunk-"),
+        Bytes::from_static(b"third"),
+    ];
+    let origin_chunks = chunks.clone();
+    let mut ctx = MockContextBuilder::new()
+        .on_fetch(move |req: EdgeRequest| {
+            if req.uri().path() == "/t12-origin" {
+                Ok(EdgeResponse::ok(Body::from_chunks(origin_chunks.clone())))
+            } else {
+                Ok(EdgeResponse::ok("unexpected path"))
+            }
+        })
+        .build()
+        .context();
+    let router = edge_conformance::build_router().unwrap();
+    let req = http::Request::builder()
+        .uri("/t12")
+        .body(Default::default())
+        .unwrap();
+    let resp = router.handle(req, &mut ctx).await.unwrap();
+
+    let first: usize = resp.headers()["x-t12-first-chunk"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(first, chunks[0].len());
+
+    let relay = resp.into_body().collect().await.unwrap();
+    let expected: Bytes = chunks[1..].iter().flat_map(|c| c.iter().copied()).collect();
+    assert_eq!(relay, expected);
+}
+
+#[tokio::test]
+async fn t12_streaming_via_router_invariant_holds() {
+    // Through the default JSON mock origin (buffered), fetch_streaming must
+    // still present a streaming (one-shot) body; the T12 invariant
+    // first-chunk + relayed body == full payload must hold (SPEC D21).
+    let resp = call("/t12").await.unwrap();
+    let first: usize = resp.headers()["x-t12-first-chunk"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(first > 0);
+
+    let relay = resp.into_body().collect().await.unwrap();
+    let full = r#"{"host":"api.example.com","path":"/t12-origin","query":""}"#;
+    assert_eq!(relay.as_ref(), &full.as_bytes()[first..]);
 }

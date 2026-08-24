@@ -65,6 +65,17 @@ class Origin(BaseHTTPRequestHandler):
         if split[0] == "/t7-target":
             self._send(200, b"redirect target")
             return
+        # T12 (streaming, M6): a fixed payload larger than a single read
+        # chunk on most platforms. The adapter streams it back (SPEC D21);
+        # drivers compare the relayed bytes against this exact payload.
+        if split[0] == "/t12-origin":
+            # ~21 KiB: larger than the Fastly adapter's 16 KiB read buffer, so
+            # the stream genuinely spans multiple chunks there. Drivers assert
+            # the invariant first-chunk + relay == payload, which holds at any
+            # chunk granularity on every platform.
+            payload = (b"M6 streaming payload; " * 1024) + b"end-of-stream"
+            self._send(200, payload, (("Content-Type", "text/plain"),))
+            return
         body = json.dumps(
             {
                 "host": self.headers.get("Host", ""),

@@ -58,12 +58,21 @@ impl CloudflarePlatform {
     }
 
     async fn fetch_blocking(&self, req: EdgeRequest) -> Result<EdgeResponse> {
-        // D5.2: redirect: manual — neither platform auto-follows. The body
-        // is already buffered `Bytes`; the request is built from the public
-        // RequestInit API in `fetch_request_manual`.
+        let ws_resp = self.fetch_ws_response(req).await?;
+        convert::response_to_edge(ws_resp).await
+    }
+
+    async fn fetch_blocking_streaming(&self, req: EdgeRequest) -> Result<EdgeResponse> {
+        let ws_resp = self.fetch_ws_response(req).await?;
+        convert::response_to_edge_streaming(ws_resp)
+    }
+
+    /// Issue the fetch (D5.2: `redirect: manual`) and return the resolved
+    /// `web_sys::Response` — headers only; the body is still streaming.
+    async fn fetch_ws_response(&self, req: EdgeRequest) -> Result<web_sys::Response> {
         let promise = convert::fetch_request_manual(req)?;
 
-        let ws_resp: web_sys::Response = JsFuture::from(promise)
+        JsFuture::from(promise)
             .await
             .map_err(map_fetch_js_error)
             .map_err(Error::Fetch)?
@@ -73,9 +82,7 @@ impl CloudflarePlatform {
                     "cloudflare: fetch did not return a Response: {}",
                     convert::js_string(&v)
                 )))
-            })?;
-
-        convert::response_to_edge(ws_resp).await
+            })
     }
 }
 
@@ -83,6 +90,12 @@ impl Platform for CloudflarePlatform {
     fn fetch(&self, req: EdgeRequest) -> BoxFuture<'_, Result<EdgeResponse>> {
         // SendFuture: the JsFuture-based body is !Send (see `send` module).
         Box::pin(SendFuture(async move { self.fetch_blocking(req).await }))
+    }
+
+    fn fetch_streaming(&self, req: EdgeRequest) -> BoxFuture<'_, Result<EdgeResponse>> {
+        Box::pin(SendFuture(async move {
+            self.fetch_blocking_streaming(req).await
+        }))
     }
 
     fn var(&self, name: &str) -> Option<String> {

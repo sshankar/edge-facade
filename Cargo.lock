@@ -79,6 +79,7 @@ dependencies = [
 name = "conformance"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "edge-cloudflare",
  "edge-core",
  "edge-fastly",

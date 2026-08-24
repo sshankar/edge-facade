@@ -27,6 +27,7 @@ cloudflare = ["dep:edge-cloudflare", "dep:wasm-bindgen"]
 edge-core = { path = "../../edge-core" }
 edge-fastly = { path = "../../edge-fastly", optional = true }
 edge-cloudflare = { path = "../../edge-cloudflare", optional = true }
+bytes = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
 wasm-bindgen = { version = "0.2", optional = true }

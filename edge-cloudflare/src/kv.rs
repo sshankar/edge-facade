@@ -12,7 +12,7 @@ use bytes::Bytes;
 use edge_core::{
     error::{Error, KvError},
     kv::{KvBackend, KvValue},
-    Body, Result,
+    Result,
 };
 use futures_util::future::BoxFuture;
 
@@ -47,11 +47,11 @@ impl KvBackend for CloudflareKvBackend {
         let key = key.to_string();
         Box::pin(SendFuture(async move {
             let bytes = store.get(&key).bytes().await.map_err(kv_err)?;
-            Ok(bytes.map(|b| KvValue::from_body(Bytes::from(b))))
+            Ok(bytes.map(|b| KvValue::from_bytes(Bytes::from(b))))
         }))
     }
 
-    fn put(&self, key: &str, value: Body) -> BoxFuture<'_, Result<()>> {
+    fn put(&self, key: &str, value: Bytes) -> BoxFuture<'_, Result<()>> {
         let store = self.store.clone();
         let key = key.to_string();
         Box::pin(SendFuture(async move {

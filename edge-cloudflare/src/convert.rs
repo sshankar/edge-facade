@@ -1,39 +1,119 @@
 //! HTTP conversions between `edge_core` types and the workers-rs SDK
 //! (SPEC §8.1): use the worker crate's `http`-feature helpers
 //! (`request_from_wasm` / `response_to_wasm` / …), normalizing bodies via
-//! full buffering (decision D2).
+//! full buffering by default (decision D2). Streaming response bodies (SPEC
+//! D21) keep the `ReadableStream` live: `WorkerChunkStream` adapts
+//! `worker::Body` to the core `ChunkStream` trait, and `EdgeBodyStream`
+//! adapts the reverse direction for `Response::from_stream`.
+
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
 use bytes::Bytes;
-use edge_core::{EdgeRequest, EdgeResponse, Error, Result};
+use edge_core::{types::ChunkStream, Body, EdgeRequest, EdgeResponse, Error, Result as CoreResult};
+use futures_util::Stream;
 use http_body_util::BodyExt;
 use wasm_bindgen::JsCast;
 
 /// Convert a `web_sys::Request` to an [`EdgeRequest`], buffering the body.
-pub async fn request_to_edge(req: web_sys::Request) -> Result<EdgeRequest> {
+pub async fn request_to_edge(req: web_sys::Request) -> CoreResult<EdgeRequest> {
     let http_req = worker::request_from_wasm(req).map_err(convert_err)?;
     let (parts, body) = http_req.into_parts();
     let bytes = collect(body).await?;
-    Ok(http::Request::from_parts(parts, bytes))
+    Ok(http::Request::from_parts(parts, Body::buffered(bytes)))
 }
 
 /// Convert an [`EdgeResponse`] to a `web_sys::Response`.
-pub async fn response_from_edge(resp: EdgeResponse) -> Result<web_sys::Response> {
+///
+/// Buffered bodies become a one-shot stream (empty → null body, D17);
+/// streaming bodies become a live `ReadableStream` via `from_stream` (SPEC
+/// D21), so large payloads stream to the client instead of being buffered.
+pub async fn response_from_edge(resp: EdgeResponse) -> CoreResult<web_sys::Response> {
     let (parts, body) = resp.into_parts();
-    let worker_body = body_from_bytes(body).map_err(|e| Error::Internal(e.to_string()))?;
+    let worker_body = match body {
+        Body::Buffered(bytes) => {
+            body_from_bytes(bytes).map_err(|e| Error::Internal(e.to_string()))?
+        }
+        Body::Streaming(_) => worker::Body::from_stream(EdgeBodyStream(body))
+            .map_err(|e| Error::Internal(e.to_string()))?,
+    };
     let http_resp: http::Response<worker::Body> = http::Response::from_parts(parts, worker_body);
     worker::IntoResponse::into_raw(http_resp).map_err(|e| Error::Internal(e.into().to_string()))
 }
 
+/// Bridge the core [`ChunkStream`] into the `futures::Stream` shape
+/// `worker::Body::from_stream` consumes.
+pub struct EdgeBodyStream(pub Body);
+
+impl std::fmt::Debug for EdgeBodyStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("EdgeBodyStream")
+            .field(&self.0.is_streaming())
+            .finish()
+    }
+}
+
+impl Stream for EdgeBodyStream {
+    type Item = std::result::Result<Vec<u8>, worker::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        match self.0.poll_next_chunk(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(Some(chunk))) => Poll::Ready(Some(Ok(chunk.to_vec()))),
+            Poll::Ready(Ok(None)) => Poll::Ready(None),
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(worker::Error::RustError(e.to_string())))),
+        }
+    }
+}
+
 /// Convert a `web_sys::Response` to an [`EdgeResponse`], buffering the body.
-pub async fn response_to_edge(resp: web_sys::Response) -> Result<EdgeResponse> {
+pub async fn response_to_edge(resp: web_sys::Response) -> CoreResult<EdgeResponse> {
     let http_resp = worker::response_from_wasm(resp).map_err(convert_err)?;
     let (parts, body) = http_resp.into_parts();
     let bytes = collect(body).await?;
-    Ok(http::Response::from_parts(parts, bytes))
+    Ok(http::Response::from_parts(parts, Body::buffered(bytes)))
+}
+
+/// Convert a `web_sys::Response` to an [`EdgeResponse`], keeping the body
+/// as a stream (SPEC D21).
+///
+/// Headers are available immediately; the `ReadableStream` is wrapped in
+/// [`WorkerChunkStream`] and read incrementally by the handler or relayed
+/// to the client.
+pub fn response_to_edge_streaming(resp: web_sys::Response) -> CoreResult<EdgeResponse> {
+    let http_resp = worker::response_from_wasm(resp).map_err(convert_err)?;
+    let (parts, body) = http_resp.into_parts();
+    Ok(http::Response::from_parts(
+        parts,
+        Body::stream(WorkerChunkStream { body }),
+    ))
+}
+
+/// A [`ChunkStream`] over a `worker::Body` (a `ReadableStream`).
+///
+/// Polling delegates to the underlying stream's `poll_next`, driven by the
+/// JS event loop — genuinely async, so `Pending` is possible here (unlike
+/// the Fastly adapter, SPEC D21).
+#[derive(Debug)]
+pub struct WorkerChunkStream {
+    body: worker::Body,
+}
+
+impl ChunkStream for WorkerChunkStream {
+    fn poll_next_chunk(&mut self, cx: &mut TaskContext<'_>) -> Poll<CoreResult<Option<Bytes>>> {
+        match Pin::new(&mut self.body).poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(Ok(None)),
+            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Ok(Some(bytes))),
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(Error::Body(std::io::Error::other(e.to_string()))))
+            }
+        }
+    }
 }
 
 /// Buffer a `worker::Body` (a `ReadableStream`) to completion (SPEC §6.4).
-pub async fn collect(body: worker::Body) -> Result<Bytes> {
+pub async fn collect(body: worker::Body) -> CoreResult<Bytes> {
     let collected = BodyExt::collect(body)
         .await
         .map_err(|e| Error::Body(std::io::Error::other(e.to_string())))?;
@@ -67,7 +147,7 @@ pub fn body_from_bytes(bytes: Bytes) -> std::result::Result<worker::Body, worker
 ///
 /// Returns the raw promise; rejection (network failure) is handled by the
 /// caller via `JsFuture`.
-pub fn fetch_request_manual(http_req: http::Request<Bytes>) -> Result<js_sys::Promise> {
+pub fn fetch_request_manual(http_req: EdgeRequest) -> CoreResult<js_sys::Promise> {
     let (parts, body) = http_req.into_parts();
 
     let init = web_sys::RequestInit::new();
@@ -85,8 +165,12 @@ pub fn fetch_request_manual(http_req: http::Request<Bytes>) -> Result<js_sys::Pr
 
     // Empty payloads get no body at all (D17: a null body is the wire-level
     // parity for GET/HEAD; web_sys rejects present-but-empty streams).
-    if !body.is_empty() {
-        init.set_body(&js_sys::Uint8Array::from(&body[..]));
+    // Request bodies are always buffered in v1 (SPEC D2).
+    let bytes = body
+        .as_bytes()
+        .expect("request bodies must be buffered (SPEC D2)");
+    if !bytes.is_empty() {
+        init.set_body(&js_sys::Uint8Array::from(bytes));
     }
 
     let ws_req =

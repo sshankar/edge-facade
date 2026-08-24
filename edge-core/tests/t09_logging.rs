@@ -24,7 +24,7 @@ async fn macros_emit_to_mock_sink() {
     let req = http::Request::builder()
         .method("GET")
         .uri("/log")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
     router.handle(req, &mut ctx).await.unwrap();
 

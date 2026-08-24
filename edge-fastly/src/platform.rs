@@ -116,13 +116,22 @@ impl FastlyPlatform {
         }
     }
 
-    fn fetch_blocking(&self, req: EdgeRequest) -> Result<EdgeResponse> {
+    fn send_request(&self, req: EdgeRequest) -> Result<fastly::Response> {
         let backend = resolve::resolve(&self.config, req.uri(), &self.backends)?;
         let fastly_req = convert::to_fastly(req);
-        let resp = fastly_req
+        fastly_req
             .send(backend)
-            .map_err(|e| Error::Fetch(map_send_error(&e)))?;
+            .map_err(|e| Error::Fetch(map_send_error(&e)))
+    }
+
+    fn fetch_blocking(&self, req: EdgeRequest) -> Result<EdgeResponse> {
+        let resp = self.send_request(req)?;
         convert::from_fastly(resp)
+    }
+
+    fn fetch_blocking_streaming(&self, req: EdgeRequest) -> Result<EdgeResponse> {
+        let resp = self.send_request(req)?;
+        convert::from_fastly_streaming(resp)
     }
 }
 
@@ -131,6 +140,12 @@ impl Platform for FastlyPlatform {
         // SPEC §8.3: the body performs blocking host calls only, so the
         // future resolves on its first poll and the drive loop terminates.
         Box::pin(async move { self.fetch_blocking(req) })
+    }
+
+    fn fetch_streaming(&self, req: EdgeRequest) -> BoxFuture<'_, Result<EdgeResponse>> {
+        // Same host `send` as fetch — headers arrive first, the body handle
+        // stays live — so this also resolves on the first poll (SPEC D21).
+        Box::pin(async move { self.fetch_blocking_streaming(req) })
     }
 
     fn var(&self, name: &str) -> Option<String> {

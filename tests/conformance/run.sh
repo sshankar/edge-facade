@@ -152,6 +152,32 @@ assert second["host"] == "api.example.com" and second["path"] == "/t11-second", 
 ' <<<"$out" || fail "T11: sequential fetch assertions failed (body: $out)"
 echo "  T11 OK"
 
+# --- T12: streaming fetch + relay (M6, D21) ----------------------------------
+# The handler reads exactly one chunk of the origin payload, then relays the
+# remainder as a stream. Chunk boundaries are platform-dependent, so drivers
+# assert the invariant that holds everywhere: first-chunk (x-t12-first-chunk)
+# + relayed body == the origin's full payload.
+say "T12 streaming relay"
+full="$(curl -s -m 10 "http://127.0.0.1:$ORIGIN_PORT/t12-origin")"
+hdr="$(mktemp)"
+relay="$(curl -s -m 30 -D "$hdr" "http://127.0.0.1:$CONF_PORT/t12")"
+first="$(grep -i '^x-t12-first-chunk:' "$hdr" | tr -d '\r' | awk '{print $2}')"
+[ -n "$first" ] || fail "T12: missing x-t12-first-chunk header ($hdr)"
+# Streaming proof: a streamed relay has no Content-Length — Fastly sends
+# transfer-encoding: chunked (SPEC D21). A buffered relay would send
+# Content-Length.
+grep -qi '^transfer-encoding: chunked' "$hdr" \
+    || fail "T12: expected chunked (streamed) relay, got: $(head -6 "$hdr")"
+python3 - "$full" "$first" "$relay" <<'PY' || fail "T12: streaming invariant broken"; echo "  T12 OK"
+import sys
+full, first, relay = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+assert first > 0, f"first chunk empty: {first}"
+assert first <= len(full), f"first chunk longer than payload: {first}"
+assert full[first:] == relay, (
+    f"relay mismatch: full={len(full)} first={first} relay={len(relay)}"
+)
+PY
+
 # --- hello-world smoke -------------------------------------------------------
 say "hello-world routes"
 body="$(curl -s "http://127.0.0.1:$HELLO_PORT/")"

@@ -47,7 +47,22 @@ impl LogLevel {
 #[doc(hidden)]
 pub trait Platform: Send + Sync {
     /// Perform a subrequest. The request URI must be absolute.
+    ///
+    /// Returns a response whose body is fully buffered (v1 semantics, SPEC
+    /// D2).
     fn fetch(&self, req: EdgeRequest) -> BoxFuture<'_, Result<EdgeResponse>>;
+
+    /// Perform a subrequest, returning its body as a stream (SPEC D21).
+    ///
+    /// Returns once response headers are available; the body is a
+    /// [`Body::Streaming`] source (never pre-buffered), so large payloads
+    /// can be relayed or processed incrementally. Defaults to [`Platform::fetch`]
+    /// (buffered); adapters override it. On Fastly this is the same host
+    /// `send` call — headers arrive first and the body handle streams — so
+    /// it resolves on the first poll like [`Platform::fetch`] (SPEC §8.3).
+    fn fetch_streaming(&self, req: EdgeRequest) -> BoxFuture<'_, Result<EdgeResponse>> {
+        self.fetch(req)
+    }
 
     /// Look up a configuration variable by name.
     fn var(&self, name: &str) -> Option<String>;
@@ -86,9 +101,20 @@ impl Context {
     ///
     /// The URI of `req` must be absolute; adapters resolve its host to a
     /// backend. Fails with [`FetchError::BadRequest`](crate::FetchError::BadRequest)
-    /// if the URI is relative.
+    /// if the URI is relative. The response body is fully buffered (v1).
     pub async fn fetch(&mut self, req: EdgeRequest) -> Result<EdgeResponse> {
         self.0.fetch(req).await
+    }
+
+    /// Perform a subrequest, returning its body as a stream (SPEC D21).
+    ///
+    /// Like [`Context::fetch`], but the response body is a
+    /// [`crate::Body::Streaming`] source instead of buffered bytes: headers
+    /// arrive first, and the body can be read incrementally with
+    /// [`crate::Body::next_chunk`], relayed, or drained with
+    /// [`crate::Body::collect`].
+    pub async fn fetch_streaming(&mut self, req: EdgeRequest) -> Result<EdgeResponse> {
+        self.0.fetch_streaming(req).await
     }
 
     /// Look up a configuration variable, or `None` if unset.

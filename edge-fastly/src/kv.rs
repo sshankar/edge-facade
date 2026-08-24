@@ -10,7 +10,7 @@ use bytes::Bytes;
 use edge_core::{
     error::{Error, KvError},
     kv::{KvBackend, KvStore, KvValue},
-    Body, Result,
+    Result,
 };
 use fastly::kv_store::{KVStore, KVStoreError};
 use futures_util::future::BoxFuture;
@@ -37,7 +37,7 @@ impl KvBackend for FastlyKvBackend {
     fn get(&self, key: &str) -> BoxFuture<'_, Result<Option<KvValue>>> {
         // All blocking host calls; resolves on the first poll (SPEC §8.3).
         let result = match self.store.lookup(key) {
-            Ok(mut resp) => Ok(Some(KvValue::from_body(Bytes::from(
+            Ok(mut resp) => Ok(Some(KvValue::from_bytes(Bytes::from(
                 resp.take_body_bytes(),
             )))),
             // D5.3: not-found is None, not an error.
@@ -47,10 +47,10 @@ impl KvBackend for FastlyKvBackend {
         Box::pin(async move { result })
     }
 
-    fn put(&self, key: &str, value: Body) -> BoxFuture<'_, Result<()>> {
+    fn put(&self, key: &str, value: Bytes) -> BoxFuture<'_, Result<()>> {
         let result = self
             .store
-            .insert(key, fastly::Body::from(Vec::from(value)))
+            .insert(key, fastly::Body::from(value.to_vec()))
             .map_err(|e| Error::Kv(KvError::Platform(e.to_string())));
         Box::pin(async move { result })
     }

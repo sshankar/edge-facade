@@ -10,7 +10,7 @@ edge/
 ├── edge-fastly/      # Compute adapter (fastly 0.13, wasm32-wasip1)
 ├── edge-cli/         # codegen + validation: edge.toml → wrangler.toml + fastly.toml
 ├── examples/hello-world/
-└── tests/conformance/  # T1–T8, r1, T11 — identical on host (mock), Viceroy, workerd
+└── tests/conformance/  # T1–T8, r1, T11, T12 (streaming, M6) — identical on host (mock), Viceroy, workerd
 ```
 
 ## Quick start
@@ -28,7 +28,8 @@ edge-cli check    --edge-toml examples/hello-world/edge.toml --fastly-toml fastl
 ## Conformance
 
 The shared suite (`tests/conformance/`) must behave identically on the host
-(native mock), under Viceroy, and under workerd:
+(native mock), under Viceroy, and under workerd (T1–T8, r1, T11, and T12
+streaming — first-chunk + relayed body == origin payload):
 
 ```bash
 cargo test                                  # host (mock) + all unit tests
@@ -41,7 +42,8 @@ CI runs all three plus the wasm builds (`*.github/workflows/ci.yml`).
 ## Docs
 
 - `SPEC.md` — the specification (capability matrix, API, adapter contracts,
-  conformance suite, milestones, decision log).
+  conformance suite, milestones, decision log; streaming response bodies are
+  decision D21 / milestone M6).
 - `SPEC-PORTABILITY-PRIMITIVES.md` — draft v0.2 extension: deferred work,
   deadlines, client metadata, structured log fields, rate limiting,
   scheduled events (milestones M7+).

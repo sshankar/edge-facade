@@ -26,7 +26,12 @@ async fn t1_echo(req: EdgeRequest, _params: RouteParams, _ctx: Context) -> Resul
         header_x_test: Option<&'a str>,
         body: String,
     }
-    let body = String::from_utf8_lossy(req.body()).into_owned();
+    let body = String::from_utf8_lossy(
+        req.body()
+            .as_bytes()
+            .expect("request bodies are buffered (SPEC D2)"),
+    )
+    .into_owned();
     let echo = Echo {
         method: req.method().as_str(),
         path: req.uri().path(),
@@ -85,7 +90,12 @@ async fn t4_fetch(
         .body(Default::default())
         .unwrap();
     let resp = ctx.fetch(fetch_req).await?;
-    let body = String::from_utf8_lossy(resp.body()).into_owned();
+    let body = String::from_utf8_lossy(
+        resp.body()
+            .as_bytes()
+            .expect("fetch bodies are buffered (SPEC D2)"),
+    )
+    .into_owned();
     let mut out = EdgeResponse::with_status(resp.status(), body);
     // Expose the origin's status and the Host it saw, JSON-encoded by the
     // origin; passthrough status is asserted by the driver.
@@ -220,8 +230,20 @@ async fn t11_sequential(
         .unwrap();
     let second = ctx.fetch(second_req).await?;
 
-    let first_body = String::from_utf8_lossy(first.body()).into_owned();
-    let second_body = String::from_utf8_lossy(second.body()).into_owned();
+    let first_body = String::from_utf8_lossy(
+        first
+            .body()
+            .as_bytes()
+            .expect("fetch bodies are buffered (SPEC D2)"),
+    )
+    .into_owned();
+    let second_body = String::from_utf8_lossy(
+        second
+            .body()
+            .as_bytes()
+            .expect("fetch bodies are buffered (SPEC D2)"),
+    )
+    .into_owned();
     let pair = Pair {
         first: &first_body,
         second: &second_body,
@@ -280,7 +302,7 @@ async fn t8_kv(_req: EdgeRequest, _params: RouteParams, ctx: Context) -> Result<
     kv.put("m4-bin", Body::from_static(&[0xff, 0x00])).await?;
     let bin = match kv.get("m4-bin").await? {
         Some(v) => v.bytes().await?,
-        None => Body::new(),
+        None => bytes::Bytes::new(),
     };
     kv.delete("m4-bin").await?;
 
@@ -293,6 +315,40 @@ async fn t8_kv(_req: EdgeRequest, _params: RouteParams, ctx: Context) -> Result<
     let mut resp = EdgeResponse::ok("");
     resp.json(&report)?;
     Ok(resp)
+}
+
+/// T12 — streaming fetch + relay (M6, SPEC §11 T12): `fetch_streaming`
+/// returns the origin's headers immediately and its body as a streaming
+/// source (never pre-buffered). The handler reads exactly one chunk —
+/// incremental processing — then re-wraps the unread remainder as the
+/// client response body, which is itself streamed to the client (SPEC D21).
+///
+/// Chunk boundaries are platform-dependent (Fastly read chunks vs CF
+/// ReadableStream), so the handler reports the consumed chunk's length in
+/// `x-t12-first-chunk` and drivers assert the invariant that holds on every
+/// platform: first-chunk + relayed body == the origin's full payload.
+async fn t12_streaming(
+    _req: EdgeRequest,
+    _params: RouteParams,
+    mut ctx: Context,
+) -> Result<EdgeResponse> {
+    let fetch_req = http::Request::builder()
+        .uri("http://api.example.com/t12-origin")
+        .body(Default::default())
+        .unwrap();
+    let resp = ctx.fetch_streaming(fetch_req).await?;
+    let status = resp.status();
+    let mut body = resp.into_body();
+    // Incremental processing: read exactly one chunk before relaying.
+    let first = body.next_chunk().await?;
+    let first_chunk_len = first.as_ref().map(|c| c.len()).unwrap_or(0);
+    // Relay the unread remainder as a stream (Body: ChunkStream re-boxing).
+    let mut out = EdgeResponse::with_status(status, Body::stream(body));
+    out.headers_mut().insert(
+        "x-t12-first-chunk",
+        first_chunk_len.to_string().parse().unwrap(),
+    );
+    Ok(out)
 }
 
 /// Build the router with all scenarios mounted.
@@ -308,6 +364,7 @@ pub fn build_router() -> Result<Router> {
     router.get("/t8", handler(t8_kv))?;
     router.get("/r1", handler(r1_redirect))?;
     router.get("/t11", handler(t11_sequential))?;
+    router.get("/t12", handler(t12_streaming))?;
     Ok(router)
 }
 

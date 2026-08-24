@@ -32,7 +32,7 @@ async fn path_params_and_query_extraction() {
     let req = http::Request::builder()
         .method("GET")
         .uri("/hello/alice?x=1")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
 
     let resp = router.handle(req, &mut ctx).await.unwrap();
@@ -47,7 +47,7 @@ async fn unknown_path_is_404() {
     let req = http::Request::builder()
         .method("GET")
         .uri("/nope")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
     let err = router.handle(req, &mut ctx).await.unwrap_err();
     assert!(matches!(err, Error::Router(PathError::NotFound)));
@@ -61,7 +61,7 @@ async fn method_mismatch_is_404() {
     let req = http::Request::builder()
         .method("POST")
         .uri("/hello/alice")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
     let err = router.handle(req, &mut ctx).await.unwrap_err();
     assert!(matches!(err, Error::Router(PathError::NotFound)));
@@ -75,7 +75,7 @@ async fn method_agnostic_route_matches_any_method() {
     let req = http::Request::builder()
         .method("POST")
         .uri("/anything")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
     assert_eq!(resp.text().unwrap(), "any method");

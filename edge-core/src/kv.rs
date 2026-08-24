@@ -12,14 +12,16 @@ use crate::Result;
 
 /// Internal KV backend SPI, implemented by platform adapters and the mock.
 ///
-/// **Not part of the stable public API** (`#[doc(hidden)]`).
+/// **Not part of the stable public API** (`#[doc(hidden)]`). Values are
+/// always fully buffered bytes: [`KvStore::put`] drains streaming bodies
+/// before they reach a backend (SPEC D21: KV stores bytes, not streams).
 #[doc(hidden)]
 pub trait KvBackend: Send + Sync + fmt::Debug {
     /// Fetch the value for `key`, or `None` if absent.
     fn get(&self, key: &str) -> BoxFuture<'_, Result<Option<KvValue>>>;
 
     /// Store `value` under `key`.
-    fn put(&self, key: &str, value: Body) -> BoxFuture<'_, Result<()>>;
+    fn put(&self, key: &str, value: bytes::Bytes) -> BoxFuture<'_, Result<()>>;
 
     /// Remove `key`.
     fn delete(&self, key: &str) -> BoxFuture<'_, Result<()>>;
@@ -52,8 +54,12 @@ impl KvStore {
     }
 
     /// Store `value` under `key`, overwriting any existing value.
+    ///
+    /// Streaming bodies are drained to bytes first (KV stores bytes, not
+    /// streams — SPEC D21).
     pub async fn put(&self, key: &str, value: impl Into<Body>) -> Result<()> {
-        self.0.put(key, value.into()).await
+        let bytes = value.into().collect().await?;
+        self.0.put(key, bytes).await
     }
 
     /// Remove `key`. Succeeds whether or not the key existed.
@@ -62,19 +68,19 @@ impl KvStore {
     }
 }
 
-/// A KV value, decoded on demand.
+/// A KV value, decoded on demand. Values are always fully buffered bytes.
 #[derive(Debug, Clone)]
-pub struct KvValue(Body);
+pub struct KvValue(bytes::Bytes);
 
 impl KvValue {
-    /// Wrap a raw body (adapter SPI; `#[doc(hidden)]`).
+    /// Wrap a raw value (adapter SPI; `#[doc(hidden)]`).
     #[doc(hidden)]
-    pub fn from_body(body: Body) -> Self {
-        Self(body)
+    pub fn from_bytes(bytes: bytes::Bytes) -> Self {
+        Self(bytes)
     }
 
     /// The raw bytes.
-    pub async fn bytes(self) -> Result<Body> {
+    pub async fn bytes(self) -> Result<bytes::Bytes> {
         Ok(self.0)
     }
 

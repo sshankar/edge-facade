@@ -11,7 +11,7 @@ fn status_and_header_passthrough() {
 
     assert_eq!(resp.status(), StatusCode::CREATED);
     assert_eq!(resp.headers()["x-custom"], "value");
-    assert_eq!(resp.body(), &b"made"[..]);
+    assert_eq!(resp.body().as_bytes(), Some(&b"made"[..]));
 }
 
 #[test]
@@ -34,7 +34,8 @@ fn json_helper_sets_type_and_is_parseable() {
         .unwrap();
 
     assert_eq!(resp.headers()["content-type"], "application/json");
-    let parsed: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_slice(resp.body().as_bytes().expect("buffered body")).unwrap();
     assert_eq!(parsed["ok"], true);
     assert_eq!(parsed["n"], 7);
 }

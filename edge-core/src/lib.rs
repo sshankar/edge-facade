@@ -46,8 +46,8 @@ pub use crate::error::{Error, FetchError, KvError, PathError};
 pub use crate::kv::{KvStore, KvValue};
 pub use crate::router::{handler, Handler, RouteParams, Router};
 pub use crate::types::{
-    Body, EdgeRequest, EdgeResponse, HeaderMap, HeaderName, HeaderValue, Method, ResponseExt,
-    StatusCode, Uri, Url, Version,
+    Body, ChunkStream, EdgeRequest, EdgeResponse, HeaderMap, HeaderName, HeaderValue, Method,
+    ResponseExt, StatusCode, Uri, Url, Version,
 };
 
 /// The platform entry macro: `#[edge_core::main]` (SPEC §6.2).

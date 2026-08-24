@@ -25,9 +25,9 @@ The SDK provides:
 
 ## 2. Non-goals (v1)
 
-WebSockets, Durable Objects, Queues, R2, D1, Fanout, image optimizer, device detection, scheduled/cron events, streaming request/response bodies, platform-specific geo and cache APIs, HTTP/2 push, service bindings. Anything listed here is excluded unless a later version explicitly adopts it.
+WebSockets, Durable Objects, Queues, R2, D1, Fanout, image optimizer, device detection, scheduled/cron events, streaming *request* bodies, platform-specific geo and cache APIs, HTTP/2 push, service bindings. Anything listed here is excluded unless a later version explicitly adopts it. Streaming *response* bodies were adopted in M6 (SPEC D21); `Context::fetch` still buffers (v1 semantics) and `Context::fetch_streaming` exposes the streaming path.
 
-**Supersession (draft v0.2):** `SPEC-PORTABILITY-PRIMITIVES.md` adopts *scheduled/cron events* and *client metadata (geo, network, TLS)* as portable primitives, superseding the exclusions above to the extent described there (§5, §8). Streaming request/response bodies and platform-specific cache APIs remain excluded.
+**Supersession (draft v0.2):** `SPEC-PORTABILITY-PRIMITIVES.md` adopts *scheduled/cron events* and *client metadata (geo, network, TLS)* as portable primitives, superseding the exclusions above to the extent described there (§5, §8). Streaming request bodies and platform-specific cache APIs remain excluded.
 
 ## 3. Ground truth — capability matrix (verified against SDK source)
 
@@ -41,7 +41,7 @@ WebSockets, Durable Objects, Queues, R2, D1, Fanout, image optimizer, device det
 | KV | `env.kv("NS")` → `KvStore` (get/put/delete, metadata) | `KVStore` (lookup/insert/delete, async variants) | `Context::kv` (get/put/delete only) |
 | Routing | Built-in `Router` (matchit) | none | core `Router` (matchit) |
 | Logging | `console_log!` etc. (wrangler tail) | `fastly::log` endpoints (configurable) | `log::{info,warn,error}!` |
-| Body | `worker::Body` implements `http_body::Body` (streaming) | `fastly::Body` handle, streaming-capable | fully buffered `Bytes` (v1) |
+| Body | `worker::Body` implements `http_body::Body` (streaming) | `fastly::Body` handle, streaming-capable | `Body` enum: `Buffered(Bytes)` (default; `fetch` returns this) or `Streaming(ChunkStream)` (`fetch_streaming`, M6/D21) |
 
 **Design consequences:**
 1. The `http` crate is the lingua franca — both SDKs already convert to/from its types.
@@ -85,7 +85,16 @@ edge/
 
 ```rust
 // edge-core
-pub type Body = bytes::Bytes;
+pub enum Body {
+    Buffered(bytes::Bytes),          // default; Context::fetch returns this
+    Streaming(Box<dyn ChunkStream>), // Context::fetch_streaming, or handler-built
+}
+
+pub trait ChunkStream: Send + Debug + 'static {
+    fn poll_next_chunk(&mut self, cx: &mut task::Context<'_>)
+        -> Poll<Result<Option<Bytes>>>;   // Some(chunk) | None (EOF) | Err | Pending
+}
+
 pub type EdgeRequest = http::Request<Body>;
 pub type EdgeResponse = http::Response<Body>;
 
@@ -96,13 +105,27 @@ pub use url::Url;
 Helper constructors (spec-level):
 
 ```rust
+impl Body {
+    pub fn buffered(bytes: Bytes) -> Self;             // wrap buffered bytes
+    pub fn stream(impl ChunkStream) -> Self;           // wrap a chunk source
+    pub fn once(bytes: Bytes) -> Self;                 // one-shot streaming body
+    pub fn from_chunks(impl IntoIterator<Item = Bytes>) -> Self;
+    pub fn as_bytes(&self) -> Option<&[u8]>;           // Some for Buffered only
+    pub async fn next_chunk(&mut self) -> Result<Option<Bytes>>;
+    pub async fn collect(self) -> Result<Bytes>;       // drain to Bytes
+}
+
 impl EdgeResponse {
     pub fn ok(body: impl Into<Body>) -> Self;
     pub fn status(status: StatusCode, body: impl Into<Body>) -> Self;
     pub fn json<T: Serialize>(&mut self, value: &T) -> Result<()>;
-    pub fn text(&self) -> Result<&str>;   // UTF-8 validated view
+    pub fn text(&self) -> Result<&str>;   // UTF-8 validated view; errors on streaming bodies
 }
 ```
+
+A `Buffered` body also behaves as a one-shot chunk source, so any body can be
+re-wrapped with `Body::stream` and relayed as a stream (T12). KV values are
+always buffered bytes: `KvStore::put` drains streaming bodies (SPEC D21).
 
 Body size limits are platform limits; the adapter MUST document the effective limit (CF request/response limits vs Fastly limits) and MUST NOT silently truncate.
 
@@ -307,7 +330,7 @@ Responsibilities:
 - Build `Context::fastly()`:
   - `var`/`secret` from `ConfigStore`/`SecretStore` (names from embedded config).
   - `kv()` from the configured `KVStore`.
-  - `fetch`: resolution chain §7.3; use `send` (sync) — body already buffered, so no streaming send needed in v1.
+  - `fetch`: resolution chain §7.3; `send` (sync) returns after response headers; buffered (D2). `fetch_streaming` (D21) keeps the body handle live as a `ChunkStream`.
   - `log` → configured log endpoint (`fastly::log`), fallback `eprintln!`.
 - **Drive async from the sync entry (§9.2).**
 - Map errors per §6.4.
@@ -363,6 +386,7 @@ A shared suite compiled natively (mock context), under Viceroy, and under worker
 | T9 | logging macro emits to configured sink | message present |
 | T10 | 1 MiB body buffering | identical |
 | T11 | sequential fetch (two fetches, awaited in sequence) | works on both |
+| T12 | streaming fetch + relay (M6): `fetch_streaming` reads one chunk, relays the remainder as a stream | invariant: first-chunk + relayed body == origin payload (chunk boundaries are platform-dependent) |
 
 ## 12. Milestones & acceptance criteria
 
@@ -376,7 +400,7 @@ M0–M6 deliver the v1 core of this document. M7+ deliver the runtime portabilit
 | M3 | Fetch resolver (static map + dynamic fallback) + parity rules | T4–T6, T11 on both platforms; Host parity verified empirically | ✅ done (2026-08-24): T4–T7, T11 pass on host + Viceroy + workerd (see PLAN-M3); redirect-manual bug found & fixed (D5.2); live Fastly dynamic-backend check pending account |
 | M4 | Config vars/secrets + KV | T7, T8 on both | ✅ done (2026-08-24): T7/T8 pass on host + Viceroy + workerd (see PLAN-M4); CF adapter config-aware (default KV handle via edge.toml); workerd KV harness + config-driven hello-world |
 | M5 | Router, logging, `edge-cli`, conformance CI matrix, docs | full suite green on host + Viceroy + workerd; CI on both wasm targets | ✅ done (2026-08-24): `edge-cli` generate/check + CI matrix + docs (see PLAN-M5); suite green on all three targets; §14#1 resolved (no fetch-permission key in wrangler) |
-| M6 (optional) | streaming bodies (caching → M14, geo → M10) | — | — |
+| M6 | streaming response bodies (`Body::Streaming` + `Context::fetch_streaming`; `stream_to_client` / `from_stream` on adapters; request bodies stay buffered — SPEC D21) | T12 on host + Viceroy + workerd; relay is genuinely streamed (chunked, no Content-Length on Fastly) | ✅ done (2026-08-24): T12 + 8 core streaming tests green on host + Viceroy (see PLAN-M6); workerd compile-checked, suite wired in CI (run-cf.sh) |
 | M7 | Wake-capable Fastly executor + monotonic clock + deadline API (`Context::timeout`/`elapsed`/`remaining`, `TimeoutScope`). Supersedes the D3 poll-loop on Fastly (parking, timer wakeups, handler+timer concurrency, response committed before deferred drain) | executor parks rather than busy-spins; timer-driven wakes; P5, P6 on host + Viceroy + workerd | — |
 | M8 | Fetch options: `Context::fetch_with` (`FetchOptions::timeout`, `ClientDisconnectPolicy::Ignore`) | P3, P4 on both platforms | — |
 | M9 | Deferred work: `Context::wait_until` + deterministic `drain_deferred()` on the mock context | P1, P2 on host + Viceroy + workerd | — |
@@ -401,7 +425,7 @@ Record of load-bearing design decisions. Each entry states the decision, the alt
 
 ### D2. Fully buffered `Bytes` bodies in v1 (no streaming)
 
-- **Status:** Accepted
+- **Status:** Accepted; **superseded for response bodies by D21 (M6)**. Request bodies remain fully buffered.
 - **Decision:** `EdgeRequest`/`EdgeResponse` bodies are `bytes::Bytes`; bodies are buffered at the adapter boundary. Streaming is deferred (M6+).
 - **Alternatives:** (a) `http_body::Body`-based common body type; (b) a custom streaming trait; (c) platform-native streaming without a common abstraction.
 - **Rationale:**
@@ -413,6 +437,16 @@ Record of load-bearing design decisions. Each entry states the decision, the alt
 - **Note:** Both platforms *have* streaming capability (`send_async_streaming`/`stream_to_client` on Fastly, `http_body::Body` on CF). The decision is to not expose it in the common API in v1, not to deny its existence.
 - **Consequences:** Body size is bounded by platform limits; §6.1 requires adapters to document the effective limit and never silently truncate.
 - **Revisit if:** Concrete demand emerges (large-file relay, SSE, media proxying). Enabler work: choose a streaming trait, build the Fastly select-scheduler (D3 revisit), adapt the Fastly handle to the trait, map CF `ReadableStream`.
+
+### D21. Streaming response bodies (M6), no select-scheduler needed
+
+- **Status:** Accepted (2026-08-24, M6)
+- **Decision:** `Body` is an enum — `Buffered(Bytes)` (default; `Context::fetch` returns this, v1 semantics unchanged) or `Streaming(Box<dyn ChunkStream>)`. `Context::fetch_streaming` returns the response with headers immediately and the body as a `ChunkStream`; handlers read it incrementally (`next_chunk`), relay it, or drain it (`collect`). A handler response whose body is `Streaming` is streamed to the client by the adapter: Fastly uses `Response::stream_to_client()` (headers first, then chunked writes), CF uses `worker::Body::from_stream`. Request bodies stay buffered (D2); `send_async_streaming`/upload streaming is out of scope.
+- **Rationale (why no select-scheduler):** Honest sequential streaming works under the D3 poll-loop executor because on Fastly chunk reads are *blocking host calls*: the adapter's `poll_next_chunk` reads synchronously and returns `Ready` on the first poll, exactly like every other `Context` method (SPEC §8.3). No `Pending`-state concurrency is introduced — reading a stream is a sequential loop. On CF, reads are genuinely async (ReadableStream) and the JS event loop drives them. The D2 concern — streaming needs the M7 select-scheduler — applies to *concurrent* streams (two streams interleaved, stream + timer); sequential streaming does not.
+- **Chunk boundaries are not portable.** Fastly read chunks (16 KiB reads / platform buffering) differ from CF ReadableStream chunks. Handlers MUST NOT depend on chunk sizes; T12 asserts the invariant that holds everywhere: consumed-first-chunk + relayed-body == full payload. `transfer-encoding: chunked` on the Fastly relay is asserted by the suite as the streaming proof.
+- **KV values are bytes, not streams.** `KvStore::put` drains streaming bodies to `Bytes` before reaching a backend; `KvValue` wraps `Bytes`.
+- **Consequences:** `resp.body()` no longer yields `&[u8]` directly — use `Body::as_bytes()` (buffered), `next_chunk()`/`collect()` (streaming). `ResponseExt::text()` errors on streaming bodies. These are the only source-level breaks for v1 users (grep-able: `.as_bytes().expect("...")` at fetch sites).
+- **Revisit if:** streaming request bodies (upload) or concurrent streams are needed — both require the M7 wake-capable executor (`SPEC-PORTABILITY-PRIMITIVES.md` §4.1) and `send_async_streaming` wiring.
 
 ### D3. Immediate-resolution async on Fastly (no executor in v1)
 

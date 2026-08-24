@@ -6,11 +6,13 @@ use edge_core::testing::MockContextBuilder;
 use edge_core::{Context, EdgeRequest, EdgeResponse, ResponseExt, Result, Router, StatusCode};
 
 async fn echo(req: EdgeRequest, _params: RouteParams, _ctx: Context) -> Result<EdgeResponse> {
-    let mut resp = EdgeResponse::ok(req.body().clone());
+    let method = req.method().to_string();
+    let uri = req.uri().to_string();
+    let mut resp = EdgeResponse::ok(req.into_body());
     resp.headers_mut()
-        .insert("x-echo-method", req.method().to_string().parse().unwrap());
+        .insert("x-echo-method", method.parse().unwrap());
     resp.headers_mut()
-        .insert("x-echo-uri", req.uri().to_string().parse().unwrap());
+        .insert("x-echo-uri", uri.parse().unwrap());
     Ok(resp)
 }
 
@@ -27,7 +29,7 @@ async fn t1_echo_round_trip() {
         .method("POST")
         .uri("/echo?q=rust&lang=wasm")
         .header("x-in", "42")
-        .body(Bytes::from("hello 世界"))
+        .body(edge_core::Body::from(Bytes::from("hello 世界")))
         .unwrap();
 
     let resp = router.handle(req, &mut ctx).await.unwrap();

@@ -167,7 +167,7 @@ impl Router {
 mod tests {
     use super::*;
     use crate::testing::MockContextBuilder;
-    use bytes::Bytes;
+    use crate::Body;
 
     async fn greet(_req: EdgeRequest, params: RouteParams, _ctx: Context) -> Result<EdgeResponse> {
         Ok(crate::ResponseExt::ok(format!(
@@ -185,10 +185,10 @@ mod tests {
         let req = http::Request::builder()
             .method("GET")
             .uri("/hello/alice")
-            .body(Bytes::new())
+            .body(Body::new())
             .unwrap();
         let resp = router.handle(req, &mut ctx).await.unwrap();
-        assert_eq!(resp.body(), &b"hi alice"[..]);
+        assert_eq!(resp.body().as_bytes(), Some(&b"hi alice"[..]));
     }
 
     #[tokio::test]
@@ -200,7 +200,7 @@ mod tests {
         let req = http::Request::builder()
             .method("POST")
             .uri("/only-get")
-            .body(Bytes::new())
+            .body(Body::new())
             .unwrap();
         let err = router.handle(req, &mut ctx).await.unwrap_err();
         assert!(matches!(err, Error::Router(PathError::NotFound)));
@@ -212,7 +212,7 @@ mod tests {
         let mut ctx = MockContextBuilder::new().build().context();
         let req = http::Request::builder()
             .uri("/nope")
-            .body(Bytes::new())
+            .body(Body::new())
             .unwrap();
         let err = router.handle(req, &mut ctx).await.unwrap_err();
         assert!(matches!(err, Error::Router(PathError::NotFound)));

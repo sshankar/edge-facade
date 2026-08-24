@@ -16,7 +16,7 @@ async fn fetch_routes_to_installed_handler() {
     let req = http::Request::builder()
         .method("GET")
         .uri("https://upstream.example/a?b=1")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
 
     let resp = ctx.fetch(req).await.unwrap();
@@ -34,7 +34,7 @@ async fn fetch_without_handler_is_unresolved() {
 
     let req = http::Request::builder()
         .uri("https://unknown.example/")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
 
     let err = ctx.fetch(req).await.unwrap_err();
@@ -50,7 +50,7 @@ async fn fetch_fault_injection() {
 
     let req = http::Request::builder()
         .uri("https://any.example/")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
 
     let err = ctx.fetch(req).await.unwrap_err();

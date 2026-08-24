@@ -40,7 +40,7 @@ async fn configured_keys_returned_unknown_none() {
     let req = http::Request::builder()
         .method("GET")
         .uri("/config")
-        .body(Bytes::new())
+        .body(edge_core::Body::from(Bytes::new()))
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
 

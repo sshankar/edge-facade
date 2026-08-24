@@ -27,14 +27,25 @@ pub struct MockFaults {
 }
 
 /// A record of platform interactions, for assertions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Records {
     /// Log messages in emission order: `(level, message)`.
     pub logs: Vec<(LogLevel, String)>,
-    /// Requests passed to `fetch`, in order.
+    /// Requests passed to `fetch`, in order (bodies deep-copied when
+    /// buffered; streaming bodies recorded as empty — SPEC D21).
     pub fetches: Vec<EdgeRequest>,
     /// KV operations in order, formatted `"{op}:{store}:{key}"`.
     pub kv_ops: Vec<String>,
+}
+
+impl Clone for Records {
+    fn clone(&self) -> Self {
+        Records {
+            logs: self.logs.clone(),
+            fetches: self.fetches.iter().map(record_request).collect(),
+            kv_ops: self.kv_ops.clone(),
+        }
+    }
 }
 
 /// The mock platform implementation.
@@ -70,14 +81,50 @@ impl Platform for MockPlatform {
                 .lock()
                 .expect("mock records poisoned")
                 .fetches
-                .push(req.clone());
+                .push(record_request(&req));
             if faults.fail_fetch {
                 return Err(Error::Fetch(FetchError::Connection(
                     "mock fetch disabled".to_string(),
                 )));
             }
             match handler {
-                Some(f) => f(req),
+                // v1 contract (SPEC D2): `fetch` always returns a buffered
+                // body, even if the origin handler produced a stream.
+                Some(f) => {
+                    let resp = f(req)?;
+                    let (parts, body) = resp.into_parts();
+                    let bytes = body.collect().await?;
+                    Ok(http::Response::from_parts(parts, Body::buffered(bytes)))
+                }
+                None => Err(Error::Fetch(FetchError::UnresolvedBackend(host))),
+            }
+        })
+    }
+
+    fn fetch_streaming(&self, req: EdgeRequest) -> BoxFuture<'_, Result<EdgeResponse>> {
+        let records = Arc::clone(&self.records);
+        let handler = self.fetch_handler.clone();
+        let faults = self.faults;
+        let host = req.uri().host().map(str::to_owned).unwrap_or_default();
+        Box::pin(async move {
+            records
+                .lock()
+                .expect("mock records poisoned")
+                .fetches
+                .push(record_request(&req));
+            if faults.fail_fetch {
+                return Err(Error::Fetch(FetchError::Connection(
+                    "mock fetch disabled".to_string(),
+                )));
+            }
+            match handler {
+                // fetch_streaming always presents a streaming body: buffered
+                // origins become a one-shot stream (parity with the Fastly
+                // and CF adapters, SPEC D21).
+                Some(f) => Ok(f(req)?.map(|body| match body {
+                    Body::Buffered(bytes) => Body::once(bytes),
+                    Body::Streaming(stream) => Body::Streaming(stream),
+                })),
                 None => Err(Error::Fetch(FetchError::UnresolvedBackend(host))),
             }
         })
@@ -137,6 +184,22 @@ impl MockKvBackend {
     }
 }
 
+/// Record a request for assertions without cloning its body (streaming
+/// bodies cannot be cloned; SPEC D21). Buffered bodies are preserved.
+fn record_request(req: &EdgeRequest) -> EdgeRequest {
+    let mut rec = http::Request::builder()
+        .method(req.method().clone())
+        .uri(req.uri().clone())
+        .body(Body::new())
+        // Cannot fail: no headers set, no invalid URI provided.
+        .expect("static request construction cannot fail");
+    *rec.headers_mut() = req.headers().clone();
+    if let Body::Buffered(bytes) = req.body() {
+        *rec.body_mut() = Body::buffered(bytes.clone());
+    }
+    rec
+}
+
 impl KvBackend for MockKvBackend {
     fn get(&self, key: &str) -> BoxFuture<'_, Result<Option<KvValue>>> {
         let key = key.to_string();
@@ -154,11 +217,11 @@ impl KvBackend for MockKvBackend {
                 .kv_ops
                 .push(format!("get:{store}:{key}"));
             let value = data.lock().expect("mock kv poisoned").get(&key).cloned();
-            Ok(value.map(KvValue::from_body))
+            Ok(value.map(KvValue::from_bytes))
         })
     }
 
-    fn put(&self, key: &str, value: Body) -> BoxFuture<'_, Result<()>> {
+    fn put(&self, key: &str, value: bytes::Bytes) -> BoxFuture<'_, Result<()>> {
         let key = key.to_string();
         let data = Arc::clone(&self.data);
         let records = Arc::clone(&self.records);
@@ -244,7 +307,7 @@ impl MockContextBuilder {
         mut self,
         store: impl Into<String>,
         key: impl Into<String>,
-        value: impl Into<Body>,
+        value: impl Into<bytes::Bytes>,
     ) -> Self {
         self.kv_stores
             .entry(store.into())
