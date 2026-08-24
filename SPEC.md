@@ -374,7 +374,7 @@ M0–M6 deliver the v1 core of this document. M7+ deliver the runtime portabilit
 | M1 | `edge-fastly` adapter + `edge-macros` | hello-world + T1–T3 pass under Viceroy, then live Fastly | ✅ done (2026-08-21): T1–T4 + hello-world pass under Viceroy (see PLAN-M1); live Fastly deploy pending account access |
 | M2 | `edge-cloudflare` adapter | hello-world + T1–T3 pass under workerd, then live CF | ✅ done (2026-08-22): T1–T4 + hello-world pass under workerd (see PLAN-M2); live CF deploy pending account access |
 | M3 | Fetch resolver (static map + dynamic fallback) + parity rules | T4–T6, T11 on both platforms; Host parity verified empirically | ✅ done (2026-08-24): T4–T7, T11 pass on host + Viceroy + workerd (see PLAN-M3); redirect-manual bug found & fixed (D5.2); live Fastly dynamic-backend check pending account |
-| M4 | Config vars/secrets + KV | T7, T8 on both | — |
+| M4 | Config vars/secrets + KV | T7, T8 on both | ✅ done (2026-08-24): T7/T8 pass on host + Viceroy + workerd (see PLAN-M4); CF adapter config-aware (default KV handle via edge.toml); workerd KV harness + config-driven hello-world |
 | M5 | Router, logging, `edge-cli`, conformance CI matrix, docs | full suite green on host + Viceroy + workerd; CI on both wasm targets | — |
 | M6 (optional) | streaming bodies (caching → M14, geo → M10) | — | — |
 | M7 | Wake-capable Fastly executor + monotonic clock + deadline API (`Context::timeout`/`elapsed`/`remaining`, `TimeoutScope`). Supersedes the D3 poll-loop on Fastly (parking, timer wakeups, handler+timer concurrency, response committed before deferred drain) | executor parks rather than busy-spins; timer-driven wakes; P5, P6 on host + Viceroy + workerd | — |

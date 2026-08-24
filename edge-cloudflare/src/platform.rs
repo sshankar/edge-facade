@@ -10,6 +10,7 @@
 use std::fmt;
 
 use edge_core::{
+    config::EdgeConfig,
     context::{Context, LogLevel, Platform},
     error::{Error, FetchError, KvError},
     kv::KvStore,
@@ -34,23 +35,26 @@ fn map_fetch_js_error(e: wasm_bindgen::JsValue) -> FetchError {
 /// The Cloudflare platform.
 pub struct CloudflarePlatform {
     env: worker::Env,
+    config: EdgeConfig,
 }
 
 impl fmt::Debug for CloudflarePlatform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CloudflarePlatform").finish_non_exhaustive()
+        f.debug_struct("CloudflarePlatform")
+            .field("service", &self.config.service().name)
+            .finish_non_exhaustive()
     }
 }
 
 impl CloudflarePlatform {
     /// Build the Cloudflare-backed [`Context`] (SPEC §8.1).
-    pub fn context(env: worker::Env) -> Context {
-        Context::from_platform(Box::new(Self::new(env)))
+    pub fn context(env: worker::Env, config: EdgeConfig) -> Context {
+        Context::from_platform(Box::new(Self::new(env, config)))
     }
 
-    /// Wrap an `Env`.
-    pub fn new(env: worker::Env) -> Self {
-        Self { env }
+    /// Wrap an `Env` with the service's embedded config.
+    pub fn new(env: worker::Env, config: EdgeConfig) -> Self {
+        Self { env, config }
     }
 
     async fn fetch_blocking(&self, req: EdgeRequest) -> Result<EdgeResponse> {
@@ -94,11 +98,22 @@ impl Platform for CloudflarePlatform {
     }
 
     fn kv(&self, name: &str) -> Result<KvStore> {
-        // `name` IS the KV binding name on Cloudflare (namespaces are
-        // declared in wrangler.toml under that binding; SPEC §7.2).
+        // The `default` handle (`Context::kv`) resolves to the binding named
+        // in edge.toml `[stores] kv` (SPEC §8.1: binding name from embedded
+        // config — same semantics as the Fastly adapter); named handles map
+        // straight to their binding name (multi-store services).
+        let binding = if name == edge_core::context::DEFAULT_KV_STORE {
+            self.config.stores().kv.as_deref().ok_or_else(|| {
+                Error::Kv(KvError::Platform(
+                    "no KV store configured: set [stores] kv in edge.toml".to_string(),
+                ))
+            })?
+        } else {
+            name
+        };
         let store = self
             .env
-            .kv(name)
+            .kv(binding)
             .map_err(|e| Error::Kv(KvError::Platform(e.to_string())))?;
         Ok(KvStore::from_backend(Box::new(CloudflareKvBackend::new(
             store,

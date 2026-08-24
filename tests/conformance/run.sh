@@ -117,12 +117,27 @@ assert_json 'd["outcome"]' 'error' "http://127.0.0.1:$CONF_PORT/t6"
 assert_json 'd["category"]' 'Connection' "http://127.0.0.1:$CONF_PORT/t6"
 echo "  T6 OK"
 
-# --- T7: redirects are never auto-followed (D5.2) -----------------------------
-say "T7 redirect not followed"
-out="$(curl -s -i -m 10 "http://127.0.0.1:$CONF_PORT/t7")"
-grep -q "302" <<<"$out" || fail "T7: expected 302 passthrough, got: $(head -1 <<<"$out")"
-grep -qi '^location: /t7-target' <<<"$out" || fail "T7: missing Location: /t7-target"
+# --- T7: config vars/secrets (M4) -------------------------------------------
+say "T7 config vars/secrets"
+assert_json 'd["greeting"]' 'Hello' "http://127.0.0.1:$CONF_PORT/t7"
+assert_json 'd["api_key"]' 's3cret' "http://127.0.0.1:$CONF_PORT/t7"
+assert_json 'd["missing"]' 'True' "http://127.0.0.1:$CONF_PORT/t7"
 echo "  T7 OK"
+
+# --- T8: KV put/get/delete round trip (M4) ------------------------------------
+say "T8 KV round trip"
+assert_json 'd["text"]' 'hello 世界' "http://127.0.0.1:$CONF_PORT/t8"
+assert_json 'd["missing"]' 'True' "http://127.0.0.1:$CONF_PORT/t8"
+assert_json 'd["after_delete"]' 'True' "http://127.0.0.1:$CONF_PORT/t8"
+assert_json 'd["binary_ok"]' 'True' "http://127.0.0.1:$CONF_PORT/t8"
+echo "  T8 OK"
+
+# --- r1: redirects are never auto-followed (D5.2) ------------------------------
+say "r1 redirect not followed"
+out="$(curl -s -i -m 10 "http://127.0.0.1:$CONF_PORT/r1")"
+grep -q "302" <<<"$out" || fail "r1: expected 302 passthrough, got: $(head -1 <<<"$out")"
+grep -qi '^location: /t7-target' <<<"$out" || fail "r1: missing Location: /t7-target"
+echo "  r1 OK"
 
 # --- T11: sequential fetches (D3 executor contract) ---------------------------
 say "T11 sequential fetches"
@@ -140,7 +155,7 @@ echo "  T11 OK"
 # --- hello-world smoke -------------------------------------------------------
 say "hello-world routes"
 body="$(curl -s "http://127.0.0.1:$HELLO_PORT/")"
-grep -q "Hello, world!" <<<"$body" || fail "hello-world: expected greeting, got: $body"
+grep -q "Hi, world!" <<<"$body" || fail "hello-world: expected config-driven greeting, got: $body"
 body="$(curl -s "http://127.0.0.1:$HELLO_PORT/hello/edge")"
 grep -q "hello edge!" <<<"$body" || fail "hello-world: expected route greeting, got: $body"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HELLO_PORT/missing")"

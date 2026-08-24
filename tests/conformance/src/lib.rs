@@ -8,7 +8,8 @@
 
 use edge_core::router::{handler, RouteParams};
 use edge_core::{
-    Context, EdgeRequest, EdgeResponse, Error, FetchError, ResponseExt, Result, Router, StatusCode,
+    Body, Context, EdgeRequest, EdgeResponse, Error, FetchError, ResponseExt, Result, Router,
+    StatusCode,
 };
 use serde::Serialize;
 
@@ -178,11 +179,11 @@ async fn t6_fetch_error(
     Ok(resp)
 }
 
-/// T7 — redirects are never auto-followed (SPEC §7.4.2, D5.2): the origin's
-/// 302 is passed through unchanged on both platforms. Drivers assert the 302
-/// status and `Location` header survive — a platform that auto-followed
-/// would return the target's 200 instead.
-async fn t7_redirect(
+/// Redirect parity (SPEC §7.4.2, D5.2) — not part of the T-series: the
+/// origin's 302 is passed through unchanged on both platforms. Drivers
+/// assert the 302 status and `Location` header survive — a platform that
+/// auto-followed would return the target's 200 instead.
+async fn r1_redirect(
     _req: EdgeRequest,
     _params: RouteParams,
     mut ctx: Context,
@@ -230,6 +231,70 @@ async fn t11_sequential(
     Ok(resp)
 }
 
+/// T7 — config: vars/secrets for configured keys; `None` otherwise
+/// (SPEC §11 T7). The handler reports the resolved values; drivers assert
+/// the configured ones are present and an unconfigured key is `None`.
+async fn t7_config(_req: EdgeRequest, _params: RouteParams, ctx: Context) -> Result<EdgeResponse> {
+    #[derive(Serialize)]
+    struct Report {
+        greeting: String,
+        api_key: String,
+        missing: bool,
+    }
+    let report = Report {
+        greeting: ctx.var("GREETING").unwrap_or_default(),
+        api_key: ctx
+            .secret("API_KEY")
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default(),
+        missing: ctx.var("NOPE").is_none(),
+    };
+    let mut resp = EdgeResponse::ok("");
+    resp.json(&report)?;
+    Ok(resp)
+}
+
+/// T8 — KV: put/get/delete round trip, binary values, and `get` of a
+/// missing key → `None` (SPEC §11 T8). The handler reports each step's
+/// outcome; drivers assert parity across platforms.
+async fn t8_kv(_req: EdgeRequest, _params: RouteParams, ctx: Context) -> Result<EdgeResponse> {
+    #[derive(Serialize)]
+    struct Report {
+        text: Option<String>,
+        missing: bool,
+        after_delete: bool,
+        binary_ok: bool,
+    }
+    let kv = ctx.kv();
+
+    kv.put("m4-key", "hello 世界").await?;
+    let text = match kv.get("m4-key").await? {
+        Some(v) => v.text().await?,
+        None => None,
+    };
+    let missing = kv.get("m4-missing").await?.is_none();
+    kv.delete("m4-key").await?;
+    let after_delete = kv.get("m4-key").await?.is_none();
+
+    // Binary round-trip (invalid UTF-8 stays intact through both stores).
+    kv.put("m4-bin", Body::from_static(&[0xff, 0x00])).await?;
+    let bin = match kv.get("m4-bin").await? {
+        Some(v) => v.bytes().await?,
+        None => Body::new(),
+    };
+    kv.delete("m4-bin").await?;
+
+    let report = Report {
+        text,
+        missing,
+        after_delete,
+        binary_ok: bin.as_ref() == &[0xff, 0x00][..],
+    };
+    let mut resp = EdgeResponse::ok("");
+    resp.json(&report)?;
+    Ok(resp)
+}
+
 /// Build the router with all scenarios mounted.
 pub fn build_router() -> Result<Router> {
     let mut router = Router::new();
@@ -239,7 +304,9 @@ pub fn build_router() -> Result<Router> {
     router.get("/t4", handler(t4_fetch))?;
     router.get("/t5", handler(t5_undeclared))?;
     router.get("/t6", handler(t6_fetch_error))?;
-    router.get("/t7", handler(t7_redirect))?;
+    router.get("/t7", handler(t7_config))?;
+    router.get("/t8", handler(t8_kv))?;
+    router.get("/r1", handler(r1_redirect))?;
     router.get("/t11", handler(t11_sequential))?;
     Ok(router)
 }

@@ -10,8 +10,11 @@ use crate::kv::KvStore;
 use crate::types::{EdgeRequest, EdgeResponse};
 use crate::Result;
 
-/// The name of the default KV store binding.
-pub(crate) const DEFAULT_KV_STORE: &str = "default";
+/// The name of the default KV store handle (`Context::kv`).
+///
+/// Adapters resolve this handle to the binding/store named in `edge.toml`
+/// `[stores] kv` (SPEC §6.5, §8.1); named handles map directly.
+pub const DEFAULT_KV_STORE: &str = "default";
 
 /// Log severity levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

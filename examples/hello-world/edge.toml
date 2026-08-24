@@ -11,7 +11,11 @@ name = "hello-world"
 # api = { url = "https://api.example.com", backend = "api_backend" }
 
 [stores]
+# M4: the `default` KV handle and `Context::var` resolve through this
+# binding; the greeting is config-driven (GREETING in the config store /
+# wrangler binding).
 kv = "hello_kv"
+config = "hello_config"
 
 [logging]
 endpoint = "hello_logging"

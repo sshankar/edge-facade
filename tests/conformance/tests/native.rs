@@ -2,9 +2,7 @@
 //! as the Viceroy run, exercised against the mock context on the host.
 
 use edge_core::testing::MockContextBuilder;
-use edge_core::{
-    Context, EdgeRequest, EdgeResponse, ResponseExt, Result, StatusCode,
-};
+use edge_core::{Context, EdgeRequest, EdgeResponse, ResponseExt, Result, StatusCode};
 
 /// Mock origin: echoes the same JSON shape the real origin server produces
 /// in the Viceroy run (host, path, query), so assertions are identical.
@@ -141,7 +139,7 @@ async fn t6_refused_origin_surfaces_connection_category() {
 }
 
 #[tokio::test]
-async fn t7_redirect_is_not_followed() {
+async fn r1_redirect_is_not_followed() {
     // The mock origin redirects /t7-redirect -> /t7-target; the adapter must
     // pass the 302 through (D5.2), never follow it.
     let mut ctx = MockContextBuilder::new()
@@ -159,12 +157,41 @@ async fn t7_redirect_is_not_followed() {
         .context();
     let router = edge_conformance::build_router().unwrap();
     let req = http::Request::builder()
-        .uri("/t7")
+        .uri("/r1")
         .body(Default::default())
         .unwrap();
     let resp = router.handle(req, &mut ctx).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FOUND);
     assert_eq!(resp.headers()["location"], "/t7-target");
+}
+
+#[tokio::test]
+async fn t7_config_values_and_missing_none() {
+    let router = edge_conformance::build_router().unwrap();
+    let mut ctx = MockContextBuilder::new()
+        .var("GREETING", "Hello")
+        .secret("API_KEY", "s3cret")
+        .build()
+        .context();
+    let req = http::Request::builder()
+        .uri("/t7")
+        .body(Default::default())
+        .unwrap();
+    let resp = router.handle(req, &mut ctx).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    assert_eq!(json["greeting"], "Hello");
+    assert_eq!(json["api_key"], "s3cret");
+    assert_eq!(json["missing"], true);
+}
+
+#[tokio::test]
+async fn t8_kv_round_trip_on_mock() {
+    let resp = call("/t8").await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap();
+    assert_eq!(json["text"], "hello 世界");
+    assert_eq!(json["missing"], true);
+    assert_eq!(json["after_delete"], true);
+    assert_eq!(json["binary_ok"], true);
 }
 
 #[tokio::test]

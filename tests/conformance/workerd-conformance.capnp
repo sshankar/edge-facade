@@ -1,10 +1,16 @@
-# workerd config for the conformance suite (M2). Run from tests/conformance:
+# workerd config for the conformance suite (M2, M4). Run from
+# tests/conformance:
 #   workerd serve workerd-conformance.capnp
 #
 # T4 (fetch Host-parity): the worker's globalOutbound is routed to a local
 # echo origin standing in for api.example.com; ExternalServer forwards the
 # request keeping the original Host header, which is what the T4 assertions
 # check (D5.1).
+#
+# T7/T8 (M4): vars/secrets arrive as bindings (text/data); the KV namespace
+# is a kvNamespace binding pointing at the same local origin, which
+# implements workerd's KV-over-HTTP protocol on `?urlencoded=true`
+# requests (origin.py).
 
 using Workerd = import "/workerd/workerd.capnp";
 
@@ -12,6 +18,8 @@ const config :Workerd.Config = (
   services = [
     ( name = "main", worker = .worker ),
     ( name = "echo-origin",
+      external = ( address = "127.0.0.1:18080", http = () ) ),
+    ( name = "edge_kv",
       external = ( address = "127.0.0.1:18080", http = () ) ),
   ],
   sockets = [
@@ -24,6 +32,11 @@ const worker :Workerd.Worker = (
   modules = [
     (name = "index.js", esModule = embed "build/index.js"),
     (name = "index_bg.wasm", wasm = embed "build/index_bg.wasm"),
+  ],
+  bindings = [
+    ( name = "GREETING", text = "Hello" ),
+    ( name = "API_KEY", text = "s3cret" ),
+    ( name = "edge_kv", kvNamespace = "edge_kv" ),
   ],
   globalOutbound = "echo-origin",
 );

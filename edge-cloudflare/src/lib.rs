@@ -14,7 +14,7 @@
 //! #[edge_cloudflare::wasm_bindgen::prelude::wasm_bindgen]
 //! pub fn fetch(req: web_sys::Request, env: Env, ctx: JsContext) -> js_sys::Promise {
 //!     future_to_promise(AssertUnwindSafe(async move {
-//!         // -> edge_cloudflare::serve_fetch(req, env, __handler).await
+//!         // -> edge_cloudflare::serve_fetch(req, env, config, __handler).await
 //!     }))
 //! }
 //! ```
@@ -49,18 +49,20 @@ pub use worker::{console_error, console_log, Context as WorkerContext, Env as Wo
 
 use std::future::Future;
 
-use edge_core::{Context, EdgeRequest, EdgeResponse, Error, Result};
+use edge_core::{config::EdgeConfig, Context, EdgeRequest, EdgeResponse, Error, Result};
 
 /// Run `handler` for an incoming request (called by the macro-generated
 /// `fetch`).
 ///
 /// 1. Convert and buffer the `web_sys::Request`.
-/// 2. Build the [`Context`] from `env` (bindings per SPEC §8.1).
+/// 2. Build the [`Context`] from `env` + the embedded `config` (bindings per
+///    SPEC §8.1; the `default` KV handle resolves to `[stores] kv`).
 /// 3. Await the handler (native async — no executor needed).
 /// 4. Convert the response to `web_sys::Response`.
 pub async fn serve_fetch<F, Fut>(
     req: web_sys::Request,
     env: WorkerEnv,
+    config: EdgeConfig,
     handler: F,
 ) -> Result<web_sys::Response>
 where
@@ -68,7 +70,7 @@ where
     Fut: Future<Output = Result<EdgeResponse>>,
 {
     let edge_req = convert::request_to_edge(req).await?;
-    let ctx = platform::CloudflarePlatform::context(env);
+    let ctx = platform::CloudflarePlatform::context(env, config);
     let resp = handler(edge_req, ctx).await?;
     convert::response_from_edge(resp).await
 }

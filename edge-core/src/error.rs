@@ -193,10 +193,7 @@ mod tests {
             FetchError::UnresolvedBackend("h".into()).category(),
             "UnresolvedBackend"
         );
-        assert_eq!(
-            FetchError::Connection("x".into()).category(),
-            "Connection"
-        );
+        assert_eq!(FetchError::Connection("x".into()).category(), "Connection");
         assert_eq!(FetchError::Timeout.category(), "Timeout");
         assert_eq!(FetchError::Permission.category(), "Permission");
         assert_eq!(FetchError::BadRequest("x".into()).category(), "BadRequest");

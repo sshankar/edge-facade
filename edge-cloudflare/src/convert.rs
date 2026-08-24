@@ -78,9 +78,7 @@ pub fn fetch_request_manual(http_req: http::Request<Bytes>) -> Result<js_sys::Pr
         let value = value
             .to_str()
             .map_err(|e| Error::Internal(format!("request header not ASCII: {e}")))?;
-        headers
-            .append(name.as_str(), value)
-            .map_err(js_err)?;
+        headers.append(name.as_str(), value).map_err(js_err)?;
     }
     init.set_headers(&headers);
     init.set_redirect(web_sys::RequestRedirect::Manual);

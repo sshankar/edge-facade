@@ -18,4 +18,9 @@ const worker :Workerd.Worker = (
     (name = "index.js", esModule = embed "build/index.js"),
     (name = "index_bg.wasm", wasm = embed "build/index_bg.wasm"),
   ],
+  # M4: config-driven greeting (ctx.var("GREETING") resolves through this
+  # binding, matching edge.toml [stores] config = "hello_config").
+  bindings = [
+    ( name = "GREETING", text = "Hi" ),
+  ],
 );

@@ -143,8 +143,9 @@ impl Platform for FastlyPlatform {
     }
 
     fn kv(&self, name: &str) -> Result<KvStore> {
-        // v1 configures a single default store (SPEC §6.5).
-        if name != "default" {
+        // v1 configures a single default store (SPEC §6.5): the `default`
+        // handle resolves to the store bound in `edge.toml`.
+        if name != edge_core::context::DEFAULT_KV_STORE {
             return Err(Error::Kv(KvError::Platform(format!(
                 "no KV store bound to `{name}` (only `default` is configured in v1)"
             ))));

@@ -20,7 +20,9 @@
 //!   handler with the adapter's poll-loop executor (SPEC §8.3), sends the
 //!   response, and converts handler errors to a 500 (SPEC §6.2, same
 //!   convention as `fastly::main`).
-//! * `--features cloudflare` — emits the workers-rs fetch glue (M2).
+//! * `--features cloudflare` — emits the workers-rs fetch glue (M2),
+//!   embedding `edge.toml` (D9) so the adapter resolves the default KV
+//!   handle from the config (SPEC §8.1).
 //! * Both or neither — a `compile_error!` with a clear message.
 //!
 //! The user's function is renamed internally so the emitted `main`/`fetch`
@@ -83,7 +85,10 @@ fn expand(item: ItemFn) -> syn::Result<TokenStream> {
 
     // SPEC §6.2 cloudflare expansion: workers-rs fetch glue. The handler
     // runs on the JS event loop; errors become 500/404 responses (D12),
-    // same convention as the fastly branch.
+    // same convention as the fastly branch. `edge.toml` is embedded in the
+    // service crate (D9) so the adapter can resolve the `default` KV handle
+    // to the configured binding (SPEC §8.1); a bad config rejects the
+    // fetch promise with 500.
     let cloudflare_fetch = quote! {
         #[cfg(feature = "cloudflare")]
         #[::edge_cloudflare::wasm_bindgen::prelude::wasm_bindgen]
@@ -92,10 +97,23 @@ fn expand(item: ItemFn) -> syn::Result<TokenStream> {
             env: ::edge_cloudflare::WorkerEnv,
             _ctx: ::edge_cloudflare::worker_sys::Context,
         ) -> ::edge_cloudflare::js_sys::Promise {
+            let config = match ::edge_core::config::EdgeConfig::from_toml_str(
+                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/edge.toml")),
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    return ::edge_cloudflare::js_sys::Promise::reject(
+                        &::edge_cloudflare::wasm_bindgen::JsValue::from_str(
+                            &::std::format!("edge: invalid edge.toml: {e}"),
+                        ),
+                    );
+                }
+            };
             ::edge_cloudflare::js_sys::futures::future_to_promise(
                 ::std::panic::AssertUnwindSafe(async move {
                     let resp: ::edge_cloudflare::worker_sys::web_sys::Response =
-                        match ::edge_cloudflare::serve_fetch(req, env, #inner_ident).await {
+                        match ::edge_cloudflare::serve_fetch(req, env, config, #inner_ident).await
+                        {
                             Ok(resp) => resp,
                             Err(e) => {
                                 ::edge_cloudflare::console_error!("edge: {}", &e);

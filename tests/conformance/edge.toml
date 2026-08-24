@@ -15,9 +15,12 @@ api = { url = "http://api.example.com", backend = "api_backend" }
 refused = { url = "http://refused.example.com:19999", backend = "refused_backend" }
 
 [stores]
-# Declared for parity with the full schema; T7/T8 (vars/secrets/KV) land in
-# M4, so Viceroy config for these arrives then.
+# T7/T8 (vars/secrets/KV, M4): bindings resolved by each adapter — Viceroy
+# via [local_server.config_stores|secret_stores|kv_stores], workerd via
+# bindings + a kvNamespace service (same local origin).
 kv = "edge_kv"
+config = "edge_config"
+secrets = "edge_secrets"
 
 [logging]
 endpoint = "conformance_logging"
