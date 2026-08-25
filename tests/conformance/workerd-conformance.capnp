@@ -23,7 +23,10 @@ const config :Workerd.Config = (
       external = ( address = "127.0.0.1:18080", http = () ) ),
   ],
   sockets = [
-    ( name = "http", address = "127.0.0.1:8788", http = (), service = "main" ),
+    # cfBlobHeader lets the P7 driver inject request.cf properties via a
+    # `cf-blob` header (workerd parses it into request.cf and strips it).
+    ( name = "http", address = "127.0.0.1:8788",
+      http = (cfBlobHeader = "cf-blob"), service = "main" ),
   ],
 );
 

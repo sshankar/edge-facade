@@ -182,6 +182,97 @@ assert full[first:] == relay, (
 )
 PY
 
+# --- P7: client metadata (M10) ----------------------------------------------
+# The driver injects request.cf via workerd's `cf-blob` header (parsed into
+# request.cf and stripped before the worker sees it) plus cf-connecting-ip.
+# Unavailable fields (original header names, proxy classification, JA3/JA4)
+# are None — never substituted.
+say "P7 client metadata"
+CF_BLOB='{"colo":"DFW","asn":12345,"asOrganization":"Test Org","country":"US","continent":"NA","city":"Austin","region":"Texas","regionCode":"TX","postalCode":"78701","metroCode":"635","latitude":"30.27","longitude":"-97.74","httpProtocol":"HTTP/2","tlsCipher":"AEAD-AES128-GCM-SHA256","tlsVersion":"TLSv1.3"}'
+assert_json 'd["provider"]' 'Cloudflare' -H "cf-blob: $CF_BLOB" -H 'cf-connecting-ip: 203.0.113.7' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["client_ip"]' '203.0.113.7' -H "cf-blob: $CF_BLOB" -H 'cf-connecting-ip: 203.0.113.7' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["pop"]' 'DFW' -H "cf-blob: $CF_BLOB" -H 'cf-connecting-ip: 203.0.113.7' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["country_code"]' 'US' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["continent"]' 'NA' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["city"]' 'Austin' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["region_code"]' 'TX' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["postal_code"]' '78701' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["metro_code"]' '635' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["latitude"]' '30.27' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["longitude"]' '-97.74' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["network"]["asn"]' '12345' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["network"]["as_organization"]' 'Test Org' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["tls"]["protocol"]' 'TLSv1.3' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["tls"]["cipher"]' 'AEAD-AES128-GCM-SHA256' -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7"
+out="$(curl -s -H "cf-blob: $CF_BLOB" "http://127.0.0.1:$CONF_PORT/p7")"
+python3 - "$out" <<'PY' || fail "P7: unavailable fields must be None on Cloudflare"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["original_header_names"] is None, d["original_header_names"]
+assert d["network"]["proxy_type"] is None and d["network"]["proxy_description"] is None, d["network"]
+assert d["tls"]["ja3"] is None and d["tls"]["ja4"] is None, d["tls"]
+PY
+# Without cf-blob / cf-connecting-ip, request.cf is absent -> all None.
+out="$(curl -s "http://127.0.0.1:$CONF_PORT/p7")"
+python3 - "$out" <<'PY' || fail "P7: absent cf must yield all-None metadata"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["client_ip"] is None and d["pop"] is None, (d["client_ip"], d["pop"])
+assert d["geo"]["country_code"] is None and d["network"]["asn"] is None, (d["geo"], d["network"])
+PY
+echo "  P7 OK"
+
+# --- P8: original header names (None, never reconstructed) -------------------
+say "P8 original header names"
+out="$(curl -s -H 'X-Mixed-Case: v' "http://127.0.0.1:$CONF_PORT/p8")"
+python3 - "$out" <<'PY' || fail "P8: Cloudflare never reconstructs original header names"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["original_header_names"] is None, d["original_header_names"]
+assert d["header_count"] >= 2, d
+assert d["saw_original_case"] is None, d["saw_original_case"]
+PY
+echo "  P8 OK"
+
+# --- P9: log fields on success and synthetic error (M11) ---------------------
+# On Cloudflare the finalized fields ride in the x-edge-log-fields control
+# response header (the boundary record); success and error legs must carry
+# the same logical map.
+say "P9 log fields (success + synthetic error)"
+out="$(curl -s -i "http://127.0.0.1:$CONF_PORT/p9")"
+grep -qi '^x-edge-log-fields: {\"origin\":\"api-a\",\"request_id\":\"req-123\"}' <<<"$out" \
+    || fail "P9: success leg control header missing/incorrect: $(grep -i 'x-edge-log-fields' <<<"$out")"
+out="$(curl -s -i "http://127.0.0.1:$CONF_PORT/p9-error")"
+grep -q '^HTTP/1.1 500' <<<"$out" || fail "P9: synthetic error should be 500"
+grep -qi '^x-edge-log-fields: {\"origin\":\"api-a\",\"request_id\":\"req-123\"}' <<<"$out" \
+    || fail "P9: error leg control header missing/incorrect: $(grep -i 'x-edge-log-fields' <<<"$out")"
+echo "  P9 OK"
+
+# --- P10: origin control-field injection -------------------------------------
+# The injected value must be stripped; the header carries only the facade's
+# finalized fields.
+say "P10 control-field injection"
+out="$(curl -s -i "http://127.0.0.1:$CONF_PORT/p10")"
+grep -qi '^x-edge-log-fields: {\"tenant\":\"t1\"}' <<<"$out" \
+    || fail "P10: control header must carry only the facade's fields: $(grep -i 'x-edge-log-fields' <<<"$out")"
+grep -qi 'injected=origin-value' <<<"$out" && fail "P10: injected value leaked to the client"
+echo "  P10 OK"
+
+# --- P11: budget enforcement -------------------------------------------------
+# 20 fields x 303 bytes exceed the aggregate budget; the header must carry
+# exactly the deterministic retained set (the 13 newest, f07..=f19).
+say "P11 log-field budget"
+out="$(curl -s -D - "http://127.0.0.1:$CONF_PORT/p11")"
+python3 - "$out" <<'PY' || fail "P11: retained set mismatch in the control header"
+import json, re, sys
+header = re.search(r"(?im)^x-edge-log-fields: (.+?)\r?$", sys.argv[1])
+assert header, "missing x-edge-log-fields header"
+fields = json.loads(header.group(1))
+expected = {f"f{i:02}": "x" * 300 for i in range(7, 20)}
+assert fields == expected, (sorted(fields), sorted(expected))
+PY
+echo "  P11 OK"
+
 # --- hello-world smoke ------------------------------------------------------------
 say "hello-world routes"
 body="$(curl -s -m 10 "http://127.0.0.1:$HELLO_PORT/")"

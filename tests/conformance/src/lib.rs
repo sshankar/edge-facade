@@ -351,6 +351,113 @@ async fn t12_streaming(
     Ok(out)
 }
 
+/// P7 — client metadata fixture (SPEC-PORTABILITY-PRIMITIVES §11): the
+/// handler reports the full [`Context::client`] snapshot; drivers assert the
+/// available fields map and that unavailable fields are `None` (never
+/// substituted with presentation values).
+async fn p7_client_metadata(
+    _req: EdgeRequest,
+    _params: RouteParams,
+    ctx: Context,
+) -> Result<EdgeResponse> {
+    let mut resp = EdgeResponse::ok("");
+    resp.json(ctx.client())?;
+    Ok(resp)
+}
+
+/// P8 — original header names (SPEC-PORTABILITY-PRIMITIVES §11): reports
+/// `original_header_names` (the platform's answer — `None` on Cloudflare,
+/// never reconstructed from normalized headers) plus the number of headers
+/// the handler actually received, so drivers can prove a non-empty request
+/// still reports `None` where the platform does not expose originals.
+async fn p8_original_headers(
+    req: EdgeRequest,
+    _params: RouteParams,
+    ctx: Context,
+) -> Result<EdgeResponse> {
+    #[derive(Serialize)]
+    struct Report<'a> {
+        original_header_names: &'a Option<Vec<String>>,
+        header_count: usize,
+        saw_original_case: Option<bool>,
+    }
+    // If originals are reported, they must include the original spelling of
+    // the injected `X-Mixed-Case` header.
+    let saw_original_case = ctx
+        .client()
+        .original_header_names
+        .as_ref()
+        .map(|names| names.iter().any(|n| n == "X-Mixed-Case"));
+    let report = Report {
+        original_header_names: &ctx.client().original_header_names,
+        header_count: req.headers().len(),
+        saw_original_case,
+    };
+    let mut resp = EdgeResponse::ok("");
+    resp.json(&report)?;
+    Ok(resp)
+}
+
+/// P9 — log fields on success (SPEC-PORTABILITY-PRIMITIVES §11): the same
+/// logical map must be captured for a successful and a synthetic-error
+/// response.
+async fn p9_log_fields_success(
+    _req: EdgeRequest,
+    _params: RouteParams,
+    ctx: Context,
+) -> Result<EdgeResponse> {
+    ctx.set_log_field("request_id", "req-123")?;
+    ctx.set_log_field("origin", "api-a")?;
+    Ok(EdgeResponse::ok("ok"))
+}
+
+/// P9 (error leg) — same fields, then a synthetic handler error. The
+/// finalized map must match the success leg on every platform.
+async fn p9_log_fields_error(
+    _req: EdgeRequest,
+    _params: RouteParams,
+    ctx: Context,
+) -> Result<EdgeResponse> {
+    ctx.set_log_field("request_id", "req-123")?;
+    ctx.set_log_field("origin", "api-a")?;
+    Err(Error::Internal("synthetic failure (P9)".to_string()))
+}
+
+/// P10 — control-field injection (SPEC-PORTABILITY-PRIMITIVES §11): the
+/// handler sets a log field AND injects an origin-supplied control header
+/// into its response. The adapter must strip the injected value (emitting a
+/// diagnostic) so the client never sees it, and the finalized fields still
+/// reach the boundary record.
+async fn p10_control_field_injection(
+    _req: EdgeRequest,
+    _params: RouteParams,
+    ctx: Context,
+) -> Result<EdgeResponse> {
+    ctx.set_log_field("tenant", "t1")?;
+    let mut resp = EdgeResponse::ok("ok");
+    resp.headers_mut().insert(
+        "x-edge-log-fields",
+        "injected=origin-value".parse().unwrap(),
+    );
+    Ok(resp)
+}
+
+/// P11 — budget enforcement (SPEC-PORTABILITY-PRIMITIVES §11): 20 fields of
+/// ~300 bytes exceed the 4096-byte aggregate budget; the retained set must
+/// be deterministic — the 13 newest (`f07`..=`f19`) — and the diagnostics
+/// emitted. Drivers assert the exact retained set (and on Fastly that no
+/// control data reaches the client response).
+async fn p11_log_field_budget(
+    _req: EdgeRequest,
+    _params: RouteParams,
+    ctx: Context,
+) -> Result<EdgeResponse> {
+    for i in 0..20 {
+        ctx.set_log_field(format!("f{i:02}"), "x".repeat(300))?;
+    }
+    Ok(EdgeResponse::ok("ok"))
+}
+
 /// Build the router with all scenarios mounted.
 pub fn build_router() -> Result<Router> {
     let mut router = Router::new();
@@ -365,6 +472,12 @@ pub fn build_router() -> Result<Router> {
     router.get("/r1", handler(r1_redirect))?;
     router.get("/t11", handler(t11_sequential))?;
     router.get("/t12", handler(t12_streaming))?;
+    router.get("/p7", handler(p7_client_metadata))?;
+    router.get("/p8", handler(p8_original_headers))?;
+    router.get("/p9", handler(p9_log_fields_success))?;
+    router.get("/p9-error", handler(p9_log_fields_error))?;
+    router.get("/p10", handler(p10_control_field_injection))?;
+    router.get("/p11", handler(p11_log_field_budget))?;
     Ok(router)
 }
 

@@ -45,7 +45,10 @@ sleep 1
 
 # --- start Viceroy services -------------------------------------------------
 say "starting conformance service on :$CONF_PORT"
-viceroy serve -C "$CONF_DIR/fastly.toml" --addr "127.0.0.1:$CONF_PORT" "$CONF_WASM" &
+# stdout is captured so the P9–P11 log-endpoint records can be asserted
+# (Viceroy routes endpoint writes to the process stdout).
+viceroy serve -C "$CONF_DIR/fastly.toml" --addr "127.0.0.1:$CONF_PORT" "$CONF_WASM" \
+    > "$ROOT/target/viceroy-conformance.log" 2>&1 &
 PIDS+=($!)
 sleep 1
 
@@ -177,6 +180,103 @@ assert full[first:] == relay, (
     f"relay mismatch: full={len(full)} first={first} relay={len(relay)}"
 )
 PY
+
+# --- P7: client metadata (M10) ----------------------------------------------
+# Under Viceroy the client IP is the peer address (127.0.0.1), the POP comes
+# from FASTLY_POP=XXX, geo/network come from the [local_server.geolocation]
+# fixture, original header names come from the downstream original-header
+# API (lowercased by Viceroy's hyper stack — original spelling is preserved
+# on real Fastly), and TLS metadata is absent (None).
+say "P7 client metadata"
+assert_json 'd["provider"]' 'Fastly' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["client_ip"]' '127.0.0.1' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["pop"]' 'XXX' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["country_code"]' 'US' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["continent"]' 'NA' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["city"]' 'Austin' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["region_code"]' 'Texas' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["postal_code"]' '78701' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["metro_code"]' '635' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["latitude"]' '30.27' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["geo"]["longitude"]' '-97.74' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["network"]["asn"]' '64512' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["network"]["as_organization"]' 'Example Org' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["network"]["proxy_type"]' 'Hosting' "http://127.0.0.1:$CONF_PORT/p7"
+assert_json 'd["network"]["proxy_description"]' 'Cloud' "http://127.0.0.1:$CONF_PORT/p7"
+out="$(curl -s "http://127.0.0.1:$CONF_PORT/p7")"
+python3 - "$out" <<'PY' || fail "P7: TLS metadata should be None under Viceroy"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["tls"] == {"protocol": None, "cipher": None, "ja3": None, "ja4": None, "ciphers_sha1": None, "extensions_sha1": None}, d["tls"]
+assert d["original_header_names"] is not None and len(d["original_header_names"]) > 0, d["original_header_names"]
+PY
+echo "  P7 OK"
+
+# --- P8: original header names -----------------------------------------------
+# The original-header API is available on Fastly: the received names (in
+# Viceroy's case lowercased by hyper) must be reported — never `None` — and
+# the injected mixed-case header is present in its runtime-provided spelling.
+say "P8 original header names"
+out="$(curl -s -H 'X-Mixed-Case: v' "http://127.0.0.1:$CONF_PORT/p8")"
+python3 - "$out" <<'PY' || fail "P8: original_header_names must be a non-empty list on Fastly"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["original_header_names"] is not None, d
+assert "x-mixed-case" in d["original_header_names"], d["original_header_names"]
+assert d["header_count"] >= 2, d
+PY
+echo "  P8 OK"
+
+# --- P9: log fields on success and synthetic error (M11) ---------------------
+# The structured record is emitted to the configured log endpoint at
+# finalization for both outcomes; the logical map is identical.
+say "P9 log fields (success + synthetic error)"
+curl -s -o /dev/null "http://127.0.0.1:$CONF_PORT/p9"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CONF_PORT/p9-error")"
+[ "$code" = "500" ] || fail "P9: synthetic error should be 500, got $code"
+records="$(grep -c 'conformance_logging :: {"fields":{"origin":"api-a","request_id":"req-123"}}' \
+    "$ROOT/target/viceroy-conformance.log" || true)"
+[ "$records" -ge 2 ] || fail "P9: expected >= 2 finalized records (success + error), found $records"
+echo "  P9 OK"
+
+# --- P10: origin control-field injection -------------------------------------
+# The injected x-edge-log-fields value must be stripped from the client
+# response (with a diagnostic); the finalized record carries only the
+# handler's own fields.
+say "P10 control-field injection"
+out="$(curl -s -i "http://127.0.0.1:$CONF_PORT/p10")"
+grep -qi '^x-edge-log-fields:' <<<"$out" \
+    && fail "P10: control header must not reach the client on Fastly"
+grep -q "conformance_logging :: {\"fields\":{\"tenant\":\"t1\"}}" "$ROOT/target/viceroy-conformance.log" \
+    || fail "P10: finalized record missing from the log endpoint"
+grep -q "stripped client-visible logging control header" "$ROOT/target/viceroy-conformance.log" \
+    || fail "P10: strip diagnostic missing from the log endpoint"
+echo "  P10 OK"
+
+# --- P11: budget enforcement -------------------------------------------------
+# 20 fields x 303 bytes exceed the 4096-byte aggregate budget: the retained
+# set is deterministic (the 13 newest, f07..=f19) and no control data
+# reaches the client response.
+say "P11 log-field budget"
+out="$(curl -s -i "http://127.0.0.1:$CONF_PORT/p11")"
+grep -qi '^x-edge-log-fields:' <<<"$out" \
+    && fail "P11: control header must not reach the client on Fastly"
+python3 - "$ROOT/target/viceroy-conformance.log" <<'PY' || fail "P11: retained set mismatch in the log record"
+import json, re, sys
+log = open(sys.argv[1]).read()
+# Find the finalization record carrying budget-test fields (the log also
+# contains the earlier P9/P10 records).
+matches = re.findall(r"conformance_logging :: (\{\"fields\":\{.*\}\})", log)
+assert matches, "no finalized record found"
+candidates = [json.loads(m)["fields"] for m in matches]
+budget = [f for f in candidates if any(k.startswith("f") for k in f)]
+assert budget, "no budget record found"
+expected = {f"f{i:02}": "x" * 300 for i in range(7, 20)}
+assert budget[-1] == expected, (sorted(budget[-1]), sorted(expected))
+PY
+grep -q "aggregate budget" "$ROOT/target/viceroy-conformance.log" \
+    || fail "P11: budget diagnostic missing from the log endpoint"
+echo "  P11 OK"
 
 # --- hello-world smoke -------------------------------------------------------
 say "hello-world routes"

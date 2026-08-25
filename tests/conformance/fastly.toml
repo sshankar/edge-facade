@@ -28,6 +28,29 @@ format = "inline-toml"
 [local_server.config_stores.edge_config.contents]
 GREETING = "Hello"
 
+[local_server.geolocation]
+format = "inline-toml"
+
+[local_server.geolocation.addresses."127.0.0.1"]
+area_code = 0
+as_name = "Example Org"
+as_number = 64512
+city = "Austin"
+conn_speed = "broadband"
+conn_type = "wired"
+continent = "NA"
+country_code = "US"
+country_code3 = "USA"
+country_name = "United States"
+latitude = 30.27
+longitude = -97.74
+metro_code = 635
+postal_code = "78701"
+proxy_description = "cloud"
+proxy_type = "hosting"
+region = "Texas"
+utc_offset = -600
+
 [local_server.kv_stores]
 edge_kv = []
 
