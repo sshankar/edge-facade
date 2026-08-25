@@ -64,6 +64,7 @@ delivery-order). M10/M11 shipped; the rest gated on M7+.
 
 ## Migration status
 
-`SPEC.md` §1–§14 and `SPEC-PORTABILITY-PRIMITIVES.md` are fully split
-(2026-08-25). Remaining: the plan promotion (`PLAN-M*.md` → milestone
-pages) — see `AGENTS.md` §"Split roadmap" for progress.
+✅ Complete (2026-08-25): the `SPEC.md` and `SPEC-PORTABILITY-PRIMITIVES.md`
+monoliths and the `PLAN-M*.md` files were split/merged into this wiki and
+deleted (preserved in git history). This wiki is now the single source of
+truth for the specification, decisions, and milestone plans.

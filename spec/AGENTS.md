@@ -112,23 +112,18 @@ safe; say what you're about to delete before deleting.
 - Never commit generated/broken intermediate states: each commit should
   leave the tree browsable (no dangling relative links).
 
-## 5. Split roadmap
+## 5. Split status
 
-The monoliths are being split into this wiki in ordered commits (each one
-landing independently):
+The monolith split is **complete** (2026-08-25):
 
-1. ✅ **Scaffold** — this schema, the index, the pilot page
-   (`api/http-types.md` §6.1) and the two decisions it links
-   (`decisions/d02.md`, `decisions/d21.md`).
-2. ⏳ Split `SPEC.md` §1–§11 into topic pages (`overview`,
-   `capability-matrix`, `api/*`, `fetch`, `adapters/*`, `config`,
-   `conformance`, `questions`), preserving §-numbered headings.
-3. ⏳ Split §12 milestones + §13 decisions into `milestones/m*.md` and
-   `decisions/dNN.md` (all 23 decisions), with per-area decision index.
-4. ⏳ Split `SPEC-PORTABILITY-PRIMITIVES.md` into `portability/*`.
-5. ⏳ Promote `PLAN-M*.md` into `milestones/` (compaction), update the root
-   `README.md`, and mark the migration complete.
+1. ✅ Scaffold — schema, index, pilot pages.
+2. ✅ `SPEC.md` §1–§14 → topic pages, milestones, decisions.
+3. ✅ All 23 decisions → `decisions/dNN.md`.
+4. ✅ `SPEC-PORTABILITY-PRIMITIVES.md` → `portability/*`.
+5. ✅ `PLAN-M*.md` merged into `milestones/m*.md` (compaction); the
+   monoliths and plan files were deleted (preserved in git history).
 
-Until a page is created, `SPEC.md` at the repo root remains the source of
-truth for its content; the index marks such pages *(planned)*. Remove the
-*(planned)* marker as each page lands.
+Code comments still reference "SPEC §8.3" / "SPEC D21" / "§4.1"; resolve
+them via this index and the §-numbered headings preserved on each page.
+Maintenance from here is the §3 workflows: landing milestones, recording
+decisions, querying, linting, compacting.

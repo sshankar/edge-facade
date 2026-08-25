@@ -41,16 +41,10 @@ CI runs all three plus the wasm builds (`*.github/workflows/ci.yml`).
 
 ## Docs
 
-- `spec/` — the spec wiki: interlinked pages for the specification,
-  decisions, and milestone roadmap, maintained per `spec/AGENTS.md` (read
-  `spec/README.md` first). Being split from the monoliths below — pages
-  marked *(planned)* in the index are still in `SPEC.md` until the split
-  completes.
-- `SPEC.md` — the specification monolith (capability matrix, API, adapter
-  contracts, conformance suite, milestones, decision log; streaming
-  response bodies are decision D21 / milestone M6). Source of truth for
-  pages not yet split into `spec/`.
-- `SPEC-PORTABILITY-PRIMITIVES.md` — draft v0.2 extension: deferred work,
-  deadlines, client metadata, structured log fields, rate limiting,
-  scheduled events (milestones M7+).
-- `PLAN-M*.md` — per-milestone implementation plans (`PLAN-M10-M11.md` covers client metadata + structured log fields).
+- `spec/` — the spec wiki (single source of truth): interlinked pages
+  for the specification, all decisions, and the milestone roadmap,
+  maintained per `spec/AGENTS.md`. Read `spec/README.md` first. Code
+  comments referencing "SPEC §x" / "SPEC Dx" resolve via the index's
+  section map. The former `SPEC.md` / `SPEC-PORTABILITY-PRIMITIVES.md`
+  monoliths and `PLAN-M*.md` files were split into this wiki (2026-08-25)
+  and are preserved in git history.
