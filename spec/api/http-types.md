@@ -58,4 +58,4 @@ Body size limits are platform limits; the adapter MUST document the effective li
 
 - [D2 — fully buffered `Bytes` bodies in v1](../decisions/d02.md)
 - [D21 — streaming response bodies (M6)](../decisions/d21.md)
-- KV value handling: `api/kv` *(planned)*
+- KV value handling: [kv](kv.md)

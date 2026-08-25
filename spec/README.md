@@ -52,7 +52,7 @@ until promoted) and the decisions it lands.
 
 [Index](decisions/README.md) — one page per decision (`decisions/dNN.md`),
 each with status, decision, alternatives, rationale, consequences,
-revisit-if. D02 and D21 are the pilot pages.
+revisit-if. All 23 decisions are split.
 
 ## Portability primitives (draft v0.2)
 
@@ -63,7 +63,7 @@ log-fields, dictionaries, scheduled, rate-limiting, config, conformance
 
 ## Migration status
 
-The split is in progress; pages marked *(planned)* above are still inside
-`SPEC.md` at the repo root and have not been moved yet. The split proceeds
-in ordered commits — see `AGENTS.md` §"Split roadmap". Until it completes,
-treat `SPEC.md` as the source of truth for any page not yet created.
+`SPEC.md` §1–§14 is fully split (2026-08-25). Remaining: the portability
+split (`SPEC-PORTABILITY-PRIMITIVES.md` → `portability/`) and the plan
+promotion (`PLAN-M*.md` → milestone pages) — see `AGENTS.md` §"Split
+roadmap" for progress.
