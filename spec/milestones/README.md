@@ -6,12 +6,12 @@ conformance scenarios. Split from `SPEC.md` §12 (2026-08-25).
 
 M0–M6 deliver the v1 core. M7+ deliver the runtime portability primitives
 of the draft v0.2 extension in its delivery order
-(`portability/delivery-order` (planned)): the
+([portability/delivery-order](../portability/delivery-order.md)): the
 wake-capable Fastly executor and monotonic clock come first — they unblock
 timeouts and deferred work on Fastly — then fetch behavior, deferred work,
 client metadata, structured log fields, rate limiting, and optional
 scheduled delivery. P1–P15 are the portability conformance scenarios
-(`portability/conformance` (planned)); each M7+ row's
+([portability/conformance](../portability/conformance.md)); each M7+ row's
 exit criteria name the P-tests that gate it.
 
 | M | Title | Status |
@@ -35,4 +35,4 @@ exit criteria name the P-tests that gate it.
 ## See also
 
 - [conformance](../conformance.md) — T1–T12 + P7–P11 scenarios
-- `portability/delivery-order` (planned) — the M7+ delivery order
+- [portability/delivery-order](../portability/delivery-order.md) — the M7+ delivery order

@@ -27,9 +27,9 @@ in `tests/native.rs`).
 | P11 | field budget exceeded (M11) | deterministic retained set (13 newest of 20×303B) — CF header / Fastly record contain exactly the retained set |
 
 Portability conformance P1–P6, P12–P15 remain gated on M7–M9, M12–M14 —
-see `portability/conformance` (planned).
+see [portability/conformance](portability/conformance.md).
 
 ## See also
 
 - [milestones/README](milestones/README.md) — which milestones each test gates
-- `portability/conformance` (planned) — the P1–P15 scenarios
+- [portability/conformance](portability/conformance.md) — the P1–P15 scenarios

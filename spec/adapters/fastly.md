@@ -13,9 +13,9 @@ Responsibilities:
 - Map errors per [api/errors](../api/errors.md).
 
 Implemented additionally in M10/M11: client metadata from the downstream
-client IP/POP/original-header/geo APIs (`portability/client-metadata` (planned)),
+client IP/POP/original-header/geo APIs ([portability/client-metadata](../portability/client-metadata.md)),
 one structured log record per request to the log endpoint
-(`portability/log-fields` (planned)).
+([portability/log-fields](../portability/log-fields.md)).
 
 ## See also
 

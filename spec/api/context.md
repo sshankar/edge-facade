@@ -33,7 +33,7 @@ edge::log::error!(...);
 
 On Fastly, the log destination is the endpoint named by `[logging] endpoint` in shared config, falling back to `eprintln!` (captured by Viceroy).
 
-**Extended in M10/M11:** `Context::client()` returns the client metadata snapshot (`portability/client-metadata` (planned)); `Context::set_log_field`/`remove_log_field` manage structured log fields (`portability/log-fields` (planned)).
+**Extended in M10/M11:** `Context::client()` returns the client metadata snapshot ([portability/client-metadata](../portability/client-metadata.md)); `Context::set_log_field`/`remove_log_field` manage structured log fields ([portability/log-fields](../portability/log-fields.md)).
 
 ## See also
 

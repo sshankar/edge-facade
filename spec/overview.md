@@ -24,7 +24,7 @@ The SDK provides:
 
 WebSockets, Durable Objects, Queues, R2, D1, Fanout, image optimizer, device detection, scheduled/cron events, streaming *request* bodies, platform-specific geo and cache APIs, HTTP/2 push, service bindings. Anything listed here is excluded unless a later version explicitly adopts it. Streaming *response* bodies were adopted in M6 (SPEC D21 — [decisions/d21](decisions/d21.md)); `Context::fetch` still buffers (v1 semantics) and `Context::fetch_streaming` exposes the streaming path.
 
-**Supersession (draft v0.2):** `SPEC-PORTABILITY-PRIMITIVES.md` (`portability/README` — planned) adopts *scheduled/cron events* and *client metadata (geo, network, TLS)* as portable primitives, superseding the exclusions above to the extent described there. Streaming request bodies and platform-specific cache APIs remain excluded.
+**Supersession (draft v0.2):** `SPEC-PORTABILITY-PRIMITIVES.md` ([portability/README](portability/README.md)) adopts *scheduled/cron events* and *client metadata (geo, network, TLS)* as portable primitives, superseding the exclusions above to the extent described there. Streaming request bodies and platform-specific cache APIs remain excluded.
 
 ## 4. Design principles
 

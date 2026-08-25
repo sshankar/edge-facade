@@ -12,7 +12,7 @@ Responsibilities:
 - Drive the handler on the JS event loop (async native — no executor needed).
 - Never hold `!Send` JS objects across the handler boundary: everything crossing into `edge-core` is plain data (`Bytes`, `String`).
 
-Implemented additionally in M2/M10/M11: empty-body normalization ([D17](../decisions/d17.md)), `Send` bridging ([D18](../decisions/d18.md)), client metadata from `cf-connecting-ip` + `request.cf` (`portability/client-metadata` (planned)), log-field control header (`portability/log-fields` (planned)).
+Implemented additionally in M2/M10/M11: empty-body normalization ([D17](../decisions/d17.md)), `Send` bridging ([D18](../decisions/d18.md)), client metadata from `cf-connecting-ip` + `request.cf` ([portability/client-metadata](../portability/client-metadata.md)), log-field control header ([portability/log-fields](../portability/log-fields.md)).
 
 ## See also
 
