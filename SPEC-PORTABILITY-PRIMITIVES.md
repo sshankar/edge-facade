@@ -225,6 +225,18 @@ Minimum mapping:
 
 Applications derive any provider-neutral request headers from this structure.
 
+**Implemented sources (decision D23, M10):** Cloudflare — client IP from the
+`cf-connecting-ip` request header, POP/geo/network/TLS from `request.cf` (under
+workerd, injected via the socket's `cfBlobHeader` — the conformance harness
+sends a `cf-blob` header, which workerd parses into `request.cf` and strips);
+original header names and proxy classification are not exposed by the public
+API and are `None` (P8). Fastly — downstream client IP API, `compute_runtime::pop()`,
+the downstream original-header API, `geo::geo_lookup` on the client IP, and JA3
+(hex MD5)/JA4 from downstream TLS metadata; TLS protocol/cipher and
+cipher/extension hashes are not exposed by fastly 0.13 and are `None`. Sentinel
+values (`"--"` POP, empty strings, `0` ASN, `0.0` coordinates, `??` continents)
+are mapped to `None` — never substituted.
+
 ## 6. Structured logging fields
 
 Line logging and request-level fields are separate facilities:
@@ -255,9 +267,10 @@ Contract:
 
 Platform mapping:
 
-- **Cloudflare:** serialize fields into the platform control response header with correct escaping, after stripping an origin-provided value.
-- **Fastly:** emit one structured record to the configured log endpoint during finalization.
-- **Tests:** expose the finalized map to the harness and verify no control data reaches the client.
+- **Cloudflare:** serialize fields into the platform control response header (`x-edge-log-fields`, a JSON object with sorted keys) with correct escaping, after stripping an origin-provided value (diagnostic emitted). The header is the platform's boundary record — Cloudflare has no out-of-band log endpoint; the workerd harness reads it as the finalized map.
+- **Fastly:** emit one structured record (`{"fields": {...}}`) to the configured log endpoint (stderr fallback) during finalization, for every request outcome; the control header never reaches the client.
+- **Tests:** the mock exposes the finalized map to the harness (`Records::finalized_log_fields`) and the serialized control value; drivers verify no origin control data reaches the client.
+- **Shared policy (decision D22, M11):** keys normalized to lowercase ASCII and validated against `[a-z0-9][a-z0-9._-]*`; empty values omitted; per-value budget 1024 bytes (char-boundary truncation); aggregate budget 4096 bytes (oldest dropped, newest retained — deterministic); truncation emits a diagnostic. Serialized form is a JSON object with lexicographically sorted keys.
 
 ## 7. KV-backed dictionaries
 
@@ -434,8 +447,8 @@ Milestone ownership: see `SPEC.md` §12, M7–M14.
 1. Wake-capable Fastly executor, monotonic clock, and deadlines.
 2. Fetch timeout and client-disconnect behavior.
 3. Deferred work.
-4. Client metadata.
-5. Structured logging fields.
+4. Client metadata. **Shipped (M10, 2026-08-25)** — P7/P8 green on host + Viceroy + workerd.
+5. Structured logging fields. **Shipped (M11, 2026-08-25)** — P9/P10/P11 green on host + Viceroy + workerd.
 6. Rate-limit adapters and code generation.
 7. Optional scheduled delivery.
 

@@ -387,6 +387,13 @@ A shared suite compiled natively (mock context), under Viceroy, and under worker
 | T10 | 1 MiB body buffering | identical |
 | T11 | sequential fetch (two fetches, awaited in sequence) | works on both |
 | T12 | streaming fetch + relay (M6): `fetch_streaming` reads one chunk, relays the remainder as a stream | invariant: first-chunk + relayed body == origin payload (chunk boundaries are platform-dependent) |
+| P7 | client metadata fixture (M10) | available fields map; unavailable fields are `None` — on all three targets, driven by the mock fixture / Viceroy geolocation fixture / workerd `cf-blob` |
+| P8 | original header list unavailable (M10) | `None`, never reconstructed — CF (no API) and mock; Fastly reports the original-header API result |
+| P9 | log fields on success and synthetic error (M11) | same logical map captured on both — CF control header on the 200 and the 500; Fastly records in the log endpoint |
+| P10 | origin injects logging control field (M11) | value stripped and diagnostic emitted — CF header carries only facade fields; Fastly record + no client-visible header |
+| P11 | field budget exceeded (M11) | deterministic retained set (13 newest of 20×303B) — CF header / Fastly record contain exactly the retained set |
+
+Portability conformance P1–P6, P12–P15 remain gated on M7–M9, M12–M14 in `SPEC-PORTABILITY-PRIMITIVES.md` §11/§12.
 
 ## 12. Milestones & acceptance criteria
 
@@ -404,8 +411,8 @@ M0–M6 deliver the v1 core of this document. M7+ deliver the runtime portabilit
 | M7 | Wake-capable Fastly executor + monotonic clock + deadline API (`Context::timeout`/`elapsed`/`remaining`, `TimeoutScope`). Supersedes the D3 poll-loop on Fastly (parking, timer wakeups, handler+timer concurrency, response committed before deferred drain) | executor parks rather than busy-spins; timer-driven wakes; P5, P6 on host + Viceroy + workerd | — |
 | M8 | Fetch options: `Context::fetch_with` (`FetchOptions::timeout`, `ClientDisconnectPolicy::Ignore`) | P3, P4 on both platforms | — |
 | M9 | Deferred work: `Context::wait_until` + deterministic `drain_deferred()` on the mock context | P1, P2 on host + Viceroy + workerd | — |
-| M10 | Client metadata: `Context::client()` → owned `ClientMetadata` snapshot (geo, network, TLS, original header names, `EdgeProvider`) | P7, P8 on both platforms | — |
-| M11 | Structured logging fields: `set_log_field`/`remove_log_field`; CF control-header strip; Fastly log-endpoint record | P9–P11 on both platforms | — |
+| M10 | Client metadata: `Context::client()` → owned `ClientMetadata` snapshot (geo, network, TLS, original header names, `EdgeProvider`) | P7, P8 on both platforms | ✅ done (2026-08-25): `ClientMetadata` + adapters capture at request entry (CF: `request.cf` via workerd `cf-blob` fixture + `cf-connecting-ip`; Fastly: downstream client IP/POP/original-header/geo APIs, Viceroy geolocation fixture); P7/P8 on host + Viceroy + workerd (see PLAN-M10-M11) |
+| M11 | Structured logging fields: `set_log_field`/`remove_log_field`; CF control-header strip; Fastly log-endpoint record | P9–P11 on both platforms | ✅ done (2026-08-25): shared `LogFieldMap` policy (key normalization, budgets 1024/4096, deterministic retention) in edge-core; CF `x-edge-log-fields` control header (origin value stripped + diagnostic, D22); Fastly one JSON record to the log endpoint at finalization; mock exposes finalized map; P9–P11 on host + Viceroy + workerd (see PLAN-M10-M11) |
 | M12 | Rate limiting: `RateLimiter`, `[rate_limits.*]` config, codegen for CF bindings and Fastly counters/penalty boxes | P13, P14 on both platforms; config validation rejects unsupported periods/mitigations | — |
 | M13 (optional) | Scheduled events: `#[edge::scheduled]` + Fastly authenticated-HTTP delivery harness | P15 under workerd + Fastly harness; edge-cli validation fails when a schedule lacks Fastly delivery | — |
 | M14 (optional) | KV-backed dictionaries: `DictionaryStore` application library (no new facade primitive) | P12 on both platforms; cache/prewarm only after measurement | — |
@@ -447,6 +454,24 @@ Record of load-bearing design decisions. Each entry states the decision, the alt
 - **KV values are bytes, not streams.** `KvStore::put` drains streaming bodies to `Bytes` before reaching a backend; `KvValue` wraps `Bytes`.
 - **Consequences:** `resp.body()` no longer yields `&[u8]` directly — use `Body::as_bytes()` (buffered), `next_chunk()`/`collect()` (streaming). `ResponseExt::text()` errors on streaming bodies. These are the only source-level breaks for v1 users (grep-able: `.as_bytes().expect("...")` at fetch sites).
 - **Revisit if:** streaming request bodies (upload) or concurrent streams are needed — both require the M7 wake-capable executor (`SPEC-PORTABILITY-PRIMITIVES.md` §4.1) and `send_async_streaming` wiring.
+
+### D22. Structured log fields: control-header transport, shared budget policy (M11)
+
+- **Status:** Accepted (2026-08-25, M11)
+- **Decision:** `Context::set_log_field`/`remove_log_field` manage invocation-scoped string fields backed by a shared `edge_core::log::LogFieldMap` on every platform, so policy is identical (P9–P11): keys normalized to lowercase ASCII and validated against `[a-z0-9][a-z0-9._-]*` (invalid → `Error::LogField`); empty values omitted; per-value budget 1024 bytes (truncated at a UTF-8 char boundary); aggregate budget 4096 bytes of `key.len()+value.len()` with oldest-dropped deterministic retention; truncation emits a diagnostic through the log sink. Serialized form is a JSON object with sorted keys. At the adapter boundary: **Cloudflare** strips any origin-supplied value of the control header `x-edge-log-fields` (with a diagnostic) and inserts the facade's serialized fields — the header is the platform's finalization record (Cloudflare has no out-of-band log endpoint); **Fastly** emits one structured JSON record `{"fields": {...}}` to the configured log endpoint (stderr fallback) at finalization and the header never reaches the client; the **mock** records the finalized snapshot for the harness. Finalization runs for every request outcome (success, synthetic error, timeout, catch-all).
+- **Alternatives:** (a) Fastly-style log-endpoint records on CF (no such endpoint exists in Workers); (b) a reserved `cf-ew-`-style header name (not a documented platform facility); (c) `console.log` only (unstructured, not testable at the response boundary).
+- **Rationale:** "Logging fields are not client-visible" is honored on Fastly (record only) and on CF by stripping origin values and carrying only the facade's deterministic serialization; the workerd harness reads the control header as the boundary record ("expose the finalized map to the harness"). A single policy implementation guarantees P9–P11 behave identically on host, Viceroy, and workerd.
+- **Consequences:** The control header name (`x-edge-log-fields`) is reserved — handlers and origins must not set it (the adapter strips it and emits a diagnostic). Field values are strings; applications own allowlists, sensitive-data classification, and schema generation (spec §6).
+- **Revisit if:** Cloudflare ships a first-class structured logging sink (then CF can adopt the Fastly model and drop the header).
+
+### D23. Client metadata: source mapping per platform (M10)
+
+- **Status:** Accepted (2026-08-25, M10)
+- **Decision:** `Context::client()` returns the owned `ClientMetadata` snapshot captured at request entry. Sources per the spec's minimum-mapping table: **Cloudflare** — client IP from the `cf-connecting-ip` request header (connecting-client address); POP/geo/network/TLS from `request.cf` (`colo`, `asn`, `asOrganization`, `country`, `continent`, `regionCode`, `city`, `postalCode`, `metroCode`, `latitude`/`longitude`, `tlsVersion`, `tlsCipher`); original header names and proxy classification are **not exposed** by the public API → `None` (never reconstructed, P8). **Fastly** — client IP from the downstream client IP API; POP from `fastly::compute_runtime::pop()`; original header names from the downstream original-header API; geo/network from `fastly::geo::geo_lookup` on the client IP; JA3 (hex MD5) / JA4 from downstream TLS metadata; TLS protocol/cipher and cipher/extension hashes are **not exposed** by the fastly 0.13 SDK → `None`. Missing data is always `None` — no presentation values (`"--"` POP, empty strings, `0` ASN, `0.0` coordinates and `??` continents are mapped to `None`).
+- **Alternatives:** (a) Parse `cf-ray`/`cf-pop` headers for the CF POP (not the documented "request colo" source); (b) expose platform-native structs (`worker::Cf`, `fastly::Geo`) in the common API (leaks provider types).
+- **Rationale:** Every source is the documented platform facility for the field; where no facility exists the field is `None` per the spec's own rule. The snapshot is immutable and clone-safe for deferred tasks (M9).
+- **Consequences:** Under workerd, `request.cf` is only populated when the socket config sets `cfBlobHeader` (the conformance harness injects the P7 fixture via a `cf-blob` header, which workerd parses and strips); under Viceroy, geo/network are deterministic via the `[local_server.geolocation]` fixture in `tests/conformance/fastly.toml`, the POP is `XXX` (FASTLY_POP), original header names arrive lowercased by Viceroy's hyper stack (original spelling is preserved on real Fastly), and TLS metadata is absent.
+- **Revisit if:** The fastly SDK exposes TLS protocol/cipher or cipher/extension hashes, or CF adds public JA3/JA4 fields (e.g. via Bot Management defaults).
 
 ### D3. Immediate-resolution async on Fastly (no executor in v1)
 
