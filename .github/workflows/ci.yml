@@ -1,8 +1,9 @@
-# Edge SDK CI (SPEC §12, M5): host tests + both wasm targets + the two
+# Edge SDK CI (milestone M5): host tests + both wasm targets + the two
 # simulator harnesses (Viceroy for Fastly, workerd for Cloudflare).
 #
-# Every conformance scenario (T1–T8, r1, T11, T12) must pass identically on
-# the host (mock), under Viceroy, and under workerd — see tests/conformance/.
+# Every conformance scenario (T1–T8, r1, T11, T12, P7–P11) must pass
+# identically on the host (mock), under Viceroy, and under workerd — see
+# spec/conformance.md and tests/conformance/.
 
 name: ci
 
@@ -73,6 +74,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install -g @cloudflare/workerd
+      - run: npm install -g workerd
       - run: cargo install worker-build
       - run: tests/conformance/run-cf.sh

@@ -88,6 +88,11 @@ fn run_generate(args: &[String]) -> Result<(), String> {
     let config = edge_core::config::EdgeConfig::from_toml_str(&toml_str)
         .map_err(|e| format!("{e} (from {})", edge_toml.display()))?;
 
+    // The output directory is created on demand (e.g. CI writing to a
+    // fresh /tmp dir), so `generate` works in a clean checkout.
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("creating {}: {e}", out_dir.display()))?;
+
     let existing_fastly = std::fs::read_to_string(out_dir.join("fastly.toml"))
         .ok()
         .filter(|s| !s.trim().is_empty());
@@ -206,5 +211,22 @@ mod tests {
     #[test]
     fn parse_args_rejects_positional() {
         assert!(parse_args(&["positional".into()], &mut |_, _| Ok(())).is_err());
+    }
+
+    #[test]
+    fn generate_creates_missing_out_dir() {
+        // CI writes to a fresh dir (e.g. /tmp/hw) that does not exist yet;
+        // generate must create it instead of failing with os error 2.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("nested/new");
+        run_generate(&[
+            "--edge-toml".into(),
+            "../examples/hello-world/edge.toml".into(),
+            "--out-dir".into(),
+            out.to_str().unwrap().into(),
+        ])
+        .unwrap();
+        assert!(out.join("fastly.toml").is_file());
+        assert!(out.join("wrangler.toml").is_file());
     }
 }
