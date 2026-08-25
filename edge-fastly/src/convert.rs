@@ -8,19 +8,21 @@ use std::task::{Context as TaskContext, Poll, Waker};
 
 use bytes::Bytes;
 use edge_core::{
-    error::PathError, types::ChunkStream, Body, EdgeRequest, EdgeResponse, Error, Result,
-    StatusCode,
+    client::ClientMetadata, error::PathError, log::strip_control_header, types::ChunkStream, Body,
+    Context, EdgeRequest, EdgeResponse, Error, Result, StatusCode,
 };
 
-/// Read the client request, converting it to an [`EdgeRequest`].
+/// Read the client request, converting it to an [`EdgeRequest`], and capture
+/// the client metadata snapshot (M10).
 ///
 /// # Panics
 ///
 /// Panics if there is no client request in this session (Fastly runs one
 /// instance per request; `Request::from_client` panics like `fastly::main`).
-pub fn request_from_client() -> EdgeRequest {
+pub fn request_from_client() -> (EdgeRequest, ClientMetadata) {
     let req = fastly::Request::from_client();
-    to_edge(req)
+    let metadata = crate::platform::capture_client_metadata(&req);
+    (to_edge(req), metadata)
 }
 
 /// Convert a `fastly::Request` to an [`EdgeRequest`], buffering the body.
@@ -96,10 +98,15 @@ impl ChunkStream for FastlyChunkStream {
 /// `stream_to_client`: headers go out first, then chunks are written as they
 /// are read — the client observes the response progressively (SPEC D21).
 ///
+/// Structured log fields never reach the client on Fastly: any
+/// origin/handler-supplied control header is stripped first (P10); the
+/// record itself was emitted to the log endpoint at finalization.
+///
 /// # Panics
 ///
 /// Panics if the host refuses the send (same convention as `send_to_client`).
-pub fn response_to_client(resp: EdgeResponse) {
+pub fn response_to_client(mut resp: EdgeResponse, ctx: &Context) {
+    strip_control_header(&mut resp, ctx);
     let (parts, body) = resp.into_parts();
     match body {
         Body::Buffered(bytes) => {

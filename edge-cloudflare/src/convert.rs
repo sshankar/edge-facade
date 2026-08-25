@@ -10,7 +10,10 @@ use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 
 use bytes::Bytes;
-use edge_core::{types::ChunkStream, Body, EdgeRequest, EdgeResponse, Error, Result as CoreResult};
+use edge_core::{
+    log::CONTROL_HEADER, types::ChunkStream, Body, Context, EdgeRequest, EdgeResponse, Error,
+    LogLevel, Result as CoreResult,
+};
 use futures_util::Stream;
 use http_body_util::BodyExt;
 use wasm_bindgen::JsCast;
@@ -28,7 +31,14 @@ pub async fn request_to_edge(req: web_sys::Request) -> CoreResult<EdgeRequest> {
 /// Buffered bodies become a one-shot stream (empty → null body, D17);
 /// streaming bodies become a live `ReadableStream` via `from_stream` (SPEC
 /// D21), so large payloads stream to the client instead of being buffered.
-pub async fn response_from_edge(resp: EdgeResponse) -> CoreResult<web_sys::Response> {
+///
+/// Structured log fields ride in the control response header: any
+/// origin/handler-supplied value is stripped first (P10) and the adapter's
+/// finalized serialization is inserted (SPEC-PORTABILITY-PRIMITIVES §6).
+pub async fn response_from_edge(
+    resp: EdgeResponse,
+    ctx: &Context,
+) -> CoreResult<web_sys::Response> {
     let (parts, body) = resp.into_parts();
     let worker_body = match body {
         Body::Buffered(bytes) => {
@@ -38,7 +48,32 @@ pub async fn response_from_edge(resp: EdgeResponse) -> CoreResult<web_sys::Respo
             .map_err(|e| Error::Internal(e.to_string()))?,
     };
     let http_resp: http::Response<worker::Body> = http::Response::from_parts(parts, worker_body);
-    worker::IntoResponse::into_raw(http_resp).map_err(|e| Error::Internal(e.into().to_string()))
+    let ws_resp: web_sys::Response = worker::IntoResponse::into_raw(http_resp)
+        .map_err(|e| Error::Internal(e.into().to_string()))?;
+    Ok(apply_control_header(ws_resp, ctx))
+}
+
+/// Strip an origin/handler-supplied logging control header from a
+/// `web_sys::Response` (P10) and insert the adapter's finalized serialized
+/// fields when any are set (SPEC-PORTABILITY-PRIMITIVES §6).
+///
+/// The header is the boundary record on Cloudflare: the conformance harness
+/// reads it as the finalization record. Origin values never reach it — they
+/// are stripped and a diagnostic is emitted.
+pub fn apply_control_header(resp: web_sys::Response, ctx: &Context) -> web_sys::Response {
+    let headers = resp.headers();
+    if headers.get(CONTROL_HEADER).ok().flatten().is_some() {
+        let _ = headers.delete(CONTROL_HEADER);
+        ctx.log(
+            LogLevel::Warn,
+            "stripped client-visible logging control header from the response \
+             (origin-supplied value ignored)",
+        );
+    }
+    if let Some(value) = ctx.finalize_log_fields() {
+        let _ = headers.set(CONTROL_HEADER, &value);
+    }
+    resp
 }
 
 /// Bridge the core [`ChunkStream`] into the `futures::Stream` shape

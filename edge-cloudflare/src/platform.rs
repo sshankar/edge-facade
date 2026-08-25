@@ -8,22 +8,27 @@
 //! category with the JS message.
 
 use std::fmt;
+use std::sync::Mutex;
 
 use edge_core::{
+    client::{ClientMetadata, EdgeProvider, GeoMetadata, NetworkMetadata, TlsMetadata},
     config::EdgeConfig,
     context::{Context, LogLevel, Platform},
     error::{Error, FetchError, KvError},
     kv::KvStore,
+    log::LogFieldMap,
     types::EdgeRequest,
     EdgeResponse, Result,
 };
 use futures_util::future::BoxFuture;
 use js_sys::futures::JsFuture;
 use wasm_bindgen::JsCast;
+use worker_sys::ext::RequestExt as _;
 
 use crate::convert;
 use crate::kv::CloudflareKvBackend;
 use crate::send::SendFuture;
+use crate::worker_sys;
 
 /// Map a JS fetch rejection to the normalized error model (SPEC §6.4).
 fn map_fetch_js_error(e: wasm_bindgen::JsValue) -> FetchError {
@@ -36,6 +41,7 @@ fn map_fetch_js_error(e: wasm_bindgen::JsValue) -> FetchError {
 pub struct CloudflarePlatform {
     env: worker::Env,
     config: EdgeConfig,
+    log_fields: Mutex<LogFieldMap>,
 }
 
 impl fmt::Debug for CloudflarePlatform {
@@ -47,14 +53,19 @@ impl fmt::Debug for CloudflarePlatform {
 }
 
 impl CloudflarePlatform {
-    /// Build the Cloudflare-backed [`Context`] (SPEC §8.1).
-    pub fn context(env: worker::Env, config: EdgeConfig) -> Context {
-        Context::from_platform(Box::new(Self::new(env, config)))
+    /// Build the Cloudflare-backed [`Context`] (SPEC §8.1), with the
+    /// request's client metadata snapshot (M10).
+    pub fn context(env: worker::Env, config: EdgeConfig, metadata: ClientMetadata) -> Context {
+        Context::from_platform_with_metadata(Box::new(Self::new(env, config)), metadata)
     }
 
     /// Wrap an `Env` with the service's embedded config.
     pub fn new(env: worker::Env, config: EdgeConfig) -> Self {
-        Self { env, config }
+        Self {
+            env,
+            config,
+            log_fields: Mutex::new(LogFieldMap::new()),
+        }
     }
 
     async fn fetch_blocking(&self, req: EdgeRequest) -> Result<EdgeResponse> {
@@ -139,5 +150,121 @@ impl Platform for CloudflarePlatform {
             LogLevel::Warn => worker::console_warn!("[{}] {}", level.as_str(), message),
             LogLevel::Error => worker::console_error!("[{}] {}", level.as_str(), message),
         }
+    }
+
+    fn set_log_field(&self, key: String, value: String) -> Result<()> {
+        let mut map = self.log_fields.lock().expect("cf log fields poisoned");
+        let res = map.set(key, value);
+        let diags = map.drain_diagnostics();
+        drop(map);
+        for d in diags {
+            self.log(LogLevel::Warn, &d);
+        }
+        res
+    }
+
+    fn remove_log_field(&self, key: &str) {
+        self.log_fields
+            .lock()
+            .expect("cf log fields poisoned")
+            .remove(key);
+    }
+
+    fn finalize_log_fields(&self) -> Option<String> {
+        let mut map = self.log_fields.lock().expect("cf log fields poisoned");
+        let diags = map.drain_diagnostics();
+        let serialized = map.serialize();
+        drop(map);
+        for d in diags {
+            self.log(LogLevel::Warn, &d);
+        }
+        // The serialized control-header value is inserted into the response
+        // by the adapter (convert::apply_control_header); Cloudflare has no
+        // out-of-band log endpoint, so the header is the boundary record.
+        serialized
+    }
+}
+
+/// Capture the downstream client metadata snapshot (SPEC-PORTABILITY-PRIMITIVES §5,
+/// M10).
+///
+/// Sources (documented in the spec's minimum-mapping table):
+///
+/// - client IP: the `cf-connecting-ip` request header (Cloudflare's
+///   connecting-client address);
+/// - POP / geo / network / TLS: the request's `cf` properties (`request.cf`
+///   — under workerd, injected via the `cf-blob` header, see the
+///   conformance harness);
+/// - original header names: not exposed by Cloudflare — always `None`
+///   (never reconstructed, P8).
+///
+/// Unavailable data is `None` — never substituted.
+pub(crate) fn capture_client_metadata(req: &web_sys::Request) -> ClientMetadata {
+    let headers = req.headers();
+
+    let client_ip = headers
+        .get("cf-connecting-ip")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok());
+
+    let cf = req.cf();
+    let pop = cf
+        .as_ref()
+        .and_then(|cf| cf.colo().ok())
+        .filter(|s| !s.is_empty());
+
+    let geo = GeoMetadata {
+        continent: cf.as_ref().and_then(|cf| cf.continent().ok().flatten()),
+        country_code: cf.as_ref().and_then(|cf| cf.country().ok().flatten()),
+        region_code: cf.as_ref().and_then(|cf| cf.region_code().ok().flatten()),
+        city: cf.as_ref().and_then(|cf| cf.city().ok().flatten()),
+        postal_code: cf.as_ref().and_then(|cf| cf.postal_code().ok().flatten()),
+        metro_code: cf.as_ref().and_then(|cf| cf.metro_code().ok().flatten()),
+        latitude: cf
+            .as_ref()
+            .and_then(|cf| cf.latitude().ok().flatten())
+            .and_then(|v| v.parse().ok()),
+        longitude: cf
+            .as_ref()
+            .and_then(|cf| cf.longitude().ok().flatten())
+            .and_then(|v| v.parse().ok()),
+    };
+    let network = NetworkMetadata {
+        asn: cf.as_ref().and_then(|cf| cf.asn().ok().flatten()),
+        as_organization: cf
+            .as_ref()
+            .and_then(|cf| cf.as_organization().ok().flatten()),
+        // Cloudflare's public API does not expose proxy classification.
+        proxy_type: None,
+        proxy_description: None,
+    };
+    let tls = TlsMetadata {
+        protocol: cf
+            .as_ref()
+            .and_then(|cf| cf.tls_version().ok())
+            .filter(|s| !s.is_empty()),
+        cipher: cf
+            .as_ref()
+            .and_then(|cf| cf.tls_cipher().ok())
+            .filter(|s| !s.is_empty()),
+        // JA3/JA4 and cipher/extension hashes are not exposed by the public
+        // API (Bot Management only).
+        ja3: None,
+        ja4: None,
+        ciphers_sha1: None,
+        extensions_sha1: None,
+    };
+
+    ClientMetadata {
+        provider: EdgeProvider::Cloudflare,
+        client_ip,
+        pop,
+        // Cloudflare does not expose original header names; never
+        // reconstructed (P8).
+        original_header_names: None,
+        geo,
+        network,
+        tls,
     }
 }

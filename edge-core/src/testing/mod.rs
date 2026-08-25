@@ -11,9 +11,11 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 
+use crate::client::ClientMetadata;
 use crate::context::{Context, LogLevel, Platform};
 use crate::error::{Error, FetchError, KvError};
 use crate::kv::{KvBackend, KvStore, KvValue};
+use crate::log::LogFieldMap;
 use crate::types::{Body, EdgeRequest, EdgeResponse};
 use crate::Result;
 
@@ -36,6 +38,11 @@ pub struct Records {
     pub fetches: Vec<EdgeRequest>,
     /// KV operations in order, formatted `"{op}:{store}:{key}"`.
     pub kv_ops: Vec<String>,
+    /// Current structured log fields (snapshot after each mutation, M11).
+    pub log_fields: Vec<(String, String)>,
+    /// The finalized log-field snapshot from the last
+    /// `Context::finalize_log_fields()` call, or `None` if never finalized.
+    pub finalized_log_fields: Option<Vec<(String, String)>>,
 }
 
 impl Clone for Records {
@@ -44,6 +51,8 @@ impl Clone for Records {
             logs: self.logs.clone(),
             fetches: self.fetches.iter().map(record_request).collect(),
             kv_ops: self.kv_ops.clone(),
+            log_fields: self.log_fields.clone(),
+            finalized_log_fields: self.finalized_log_fields.clone(),
         }
     }
 }
@@ -57,6 +66,7 @@ pub(crate) struct MockPlatform {
     fetch_handler: Option<Arc<dyn Fn(EdgeRequest) -> Result<EdgeResponse> + Send + Sync>>,
     faults: MockFaults,
     records: Arc<Mutex<Records>>,
+    log_fields: Mutex<LogFieldMap>,
 }
 
 impl fmt::Debug for MockPlatform {
@@ -158,6 +168,55 @@ impl Platform for MockPlatform {
             .expect("mock records poisoned")
             .logs
             .push((level, message.to_string()));
+    }
+
+    fn set_log_field(&self, key: String, value: String) -> Result<()> {
+        let mut map = self.log_fields.lock().expect("mock log fields poisoned");
+        let res = map.set(key, value);
+        let diags = map.drain_diagnostics();
+        drop(map);
+        for d in diags {
+            self.log(LogLevel::Warn, &d);
+        }
+        self.sync_log_fields();
+        res
+    }
+
+    fn remove_log_field(&self, key: &str) {
+        self.log_fields
+            .lock()
+            .expect("mock log fields poisoned")
+            .remove(key);
+        self.sync_log_fields();
+    }
+
+    fn finalize_log_fields(&self) -> Option<String> {
+        let mut map = self.log_fields.lock().expect("mock log fields poisoned");
+        let diags = map.drain_diagnostics();
+        let serialized = map.serialize();
+        let snapshot = map.snapshot();
+        drop(map);
+        for d in diags {
+            self.log(LogLevel::Warn, &d);
+        }
+        self.records
+            .lock()
+            .expect("mock records poisoned")
+            .finalized_log_fields = Some(snapshot);
+        serialized
+    }
+}
+
+impl MockPlatform {
+    /// Push the current field map into the interaction records.
+    fn sync_log_fields(&self) {
+        let map = self.log_fields.lock().expect("mock log fields poisoned");
+        let snapshot = map.snapshot();
+        drop(map);
+        self.records
+            .lock()
+            .expect("mock records poisoned")
+            .log_fields = snapshot;
     }
 }
 
@@ -270,6 +329,7 @@ pub struct MockContextBuilder {
     kv_stores: HashMap<String, Arc<Mutex<HashMap<String, Bytes>>>>,
     fetch_handler: Option<Arc<dyn Fn(EdgeRequest) -> Result<EdgeResponse> + Send + Sync>>,
     faults: MockFaults,
+    metadata: Option<ClientMetadata>,
 }
 
 impl fmt::Debug for MockContextBuilder {
@@ -340,6 +400,14 @@ impl MockContextBuilder {
         self
     }
 
+    /// Set the client metadata snapshot reported by [`Context::client`]
+    /// (M10; defaults to an empty [`ClientMetadata`] with
+    /// [`crate::client::EdgeProvider::Mock`]).
+    pub fn client_metadata(mut self, metadata: ClientMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     /// Build the mock context.
     pub fn build(self) -> MockContext {
         let records = Arc::new(Mutex::new(Records::default()));
@@ -352,9 +420,11 @@ impl MockContextBuilder {
             fetch_handler: self.fetch_handler,
             faults: self.faults,
             records: Arc::clone(&records),
+            log_fields: Mutex::new(LogFieldMap::new()),
         };
+        let metadata = self.metadata.unwrap_or_default();
         MockContext {
-            ctx: Context::from_platform(Box::new(platform)),
+            ctx: Context::from_platform_with_metadata(Box::new(platform), metadata),
             records,
         }
     }

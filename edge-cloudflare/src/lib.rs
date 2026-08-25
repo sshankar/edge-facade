@@ -69,10 +69,20 @@ where
     F: FnOnce(EdgeRequest, Context) -> Fut,
     Fut: Future<Output = Result<EdgeResponse>>,
 {
+    let metadata = platform::capture_client_metadata(&req);
     let edge_req = convert::request_to_edge(req).await?;
-    let ctx = platform::CloudflarePlatform::context(env, config);
-    let resp = handler(edge_req, ctx).await?;
-    convert::response_from_edge(resp).await
+    let ctx = platform::CloudflarePlatform::context(env, config, metadata);
+    let handler_ctx = ctx.clone();
+    match handler(edge_req, handler_ctx).await {
+        Ok(resp) => convert::response_from_edge(resp, &ctx).await,
+        Err(e) => {
+            // Catch-all responses also carry the finalized log fields (P9);
+            // the control header is stripped/set on the synthetic response.
+            let mut ws_resp = error_to_response(&e);
+            ws_resp = convert::apply_control_header(ws_resp, &ctx);
+            Ok(ws_resp)
+        }
+    }
 }
 
 /// Convert a handler error into a client response (SPEC §6.2).

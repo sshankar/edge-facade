@@ -31,6 +31,7 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
+pub mod client;
 pub mod config;
 pub mod context;
 pub mod error;
@@ -40,6 +41,7 @@ pub mod router;
 pub mod testing;
 pub mod types;
 
+pub use crate::client::{ClientMetadata, EdgeProvider, GeoMetadata, NetworkMetadata, TlsMetadata};
 pub use crate::config::{ConfigError, EdgeConfig, Resolution};
 pub use crate::context::{Context, LogLevel};
 pub use crate::error::{Error, FetchError, KvError, PathError};
@@ -49,7 +51,6 @@ pub use crate::types::{
     Body, ChunkStream, EdgeRequest, EdgeResponse, HeaderMap, HeaderName, HeaderValue, Method,
     ResponseExt, StatusCode, Uri, Url, Version,
 };
-
 /// The platform entry macro: `#[edge_core::main]` (SPEC §6.2).
 ///
 /// Expands to the workers-rs fetch glue under `--features cloudflare` and

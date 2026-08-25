@@ -19,6 +19,8 @@ pub enum Error {
     Router(PathError),
     /// Body conversion or buffering failed.
     Body(std::io::Error),
+    /// A structured log field operation failed (SPEC-PORTABILITY-PRIMITIVES §6).
+    LogField(String),
     /// An unexpected internal failure.
     Internal(String),
 }
@@ -88,6 +90,7 @@ impl fmt::Display for Error {
             Error::Config(e) => write!(f, "config error: {e}"),
             Error::Router(e) => write!(f, "routing error: {e}"),
             Error::Body(e) => write!(f, "body error: {e}"),
+            Error::LogField(e) => write!(f, "log field error: {e}"),
             Error::Internal(e) => write!(f, "internal error: {e}"),
         }
     }

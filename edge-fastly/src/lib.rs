@@ -45,7 +45,19 @@ use edge_core::{config::EdgeConfig, Context, EdgeRequest, EdgeResponse, Result};
 /// Store/logging bindings are resolved from `config` (SPEC §8.2); missing
 /// stores degrade to `None` lookups rather than failing the request.
 pub fn context(config: EdgeConfig) -> Context {
-    platform::FastlyPlatform::context(config)
+    context_with_metadata(
+        config,
+        edge_core::client::ClientMetadata::empty(edge_core::client::EdgeProvider::Fastly),
+    )
+}
+
+/// Build the Fastly-backed [`Context`] for the current request, with the
+/// request's client metadata snapshot (M10).
+pub fn context_with_metadata(
+    config: EdgeConfig,
+    metadata: edge_core::client::ClientMetadata,
+) -> Context {
+    platform::FastlyPlatform::context(config, metadata)
 }
 
 /// Run `handler` as the Fastly service entry (SPEC §8.2, §8.3).
@@ -67,11 +79,18 @@ where
     Fut: std::future::Future<Output = Result<EdgeResponse>>,
 {
     fastly::init();
-    let req = convert::request_from_client();
-    let ctx = context(config);
-    let outcome = drive::drive(async move { handler(req, ctx).await });
+    let (req, metadata) = convert::request_from_client();
+    let ctx = platform::FastlyPlatform::context(config, metadata);
+    let handler_ctx = ctx.clone();
+    let outcome = drive::drive(async move { handler(req, handler_ctx).await });
+    // SPEC-PORTABILITY-PRIMITIVES §6: structured log fields are finalized
+    // for every request outcome — successful, synthetic, timeout, and
+    // catch-all — before the response goes out. The Fastly finalize emits
+    // the structured record to the configured log endpoint (or the stderr
+    // fallback); fields never ride in the client response.
+    ctx.finalize_log_fields();
     match outcome {
-        Ok(resp) => convert::response_to_client(resp),
+        Ok(resp) => convert::response_to_client(resp, &ctx),
         Err(e) => convert::error_to_client(&e),
     }
     Ok(())
